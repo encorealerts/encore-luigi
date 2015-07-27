@@ -35,19 +35,10 @@ class DownloadTrainerData(S3ToLocalTask):
   
   req_remote_host = luigi.Parameter(default='ubuntu@ec2-23-21-255-214.compute-1.amazonaws.com')
   req_remote_path = luigi.Parameter(default='labs/trainers/twitter-actor.csv')
-  req_key_file = luigi.Parameter(default='/Users/felipeclopes/.ec2/encore')
+  req_key_file    = luigi.Parameter(default='/Users/felipeclopes/.ec2/encore')
 
-  s3_path = luigi.Parameter(default='s3://encorealert-luigi-development/raw/twitter-actor.csv')
-  local_path = luigi.Parameter(default='data/actor_classification/raw/twitter-actor.csv')  
-
-  """
-    This task's dependencies:
-    * :py:class:`~.RemoteToS3Task`
-    :return: list of object (:py:class:`luigi.task.Task`)
-
-    Running this task example:
-    >>> python actor_classification.py DownloadTrainerData  --local-scheduler --date 2015-06-06
-  """
+  s3_path     = luigi.Parameter(default='s3://encorealert-luigi-development/raw/twitter-actor.csv')
+  local_path  = luigi.Parameter(default='data/actor_classification/raw/twitter-actor.csv')  
 
   def requires(self):
     return RemoteToS3Task(host=self.req_remote_host, 
@@ -182,11 +173,11 @@ class EnrichTrainerData(luigi.Task):
     return tweets
 
 class TrainRandomForestModel(luigi.Task):
-  date = luigi.Parameter(default=datetime.today())
-  start = luigi.Parameter(default=datetime(2015,07,01))
-
+  date         = luigi.Parameter(default=datetime.today())
+  start        = luigi.Parameter(default=datetime(2015,07,01))
+  s3_folder    = luigi.Parameter('s3://encorealert-luigi-development/actor_classification/csv/')
+  
   local_folder = 'data/actor_classification/csv/'
-  s3_folder    = 's3://encorealert-luigi-development/actor_classification/csv/'
   directory    = 'data/actor_classification/models/'
 
   tweets_features_cols = ['actor_favorites_count', 
@@ -327,7 +318,7 @@ class DeployModel(luigi.Task):
   key_file = luigi.Parameter(default='/Users/felipeclopes/.ec2/encore')
   
   model_local_directory = luigi.Parameter(default='data/actor_classification/models/')
-  model_remote_directory = luigi.Parameter(default='/mnt/')
+  model_remote_directory = luigi.Parameter(default='/mnt/models/')
 
   def requires(self):
     return TrainRandomForestModel(self.date)

@@ -58,3 +58,6 @@ target/
 
 # Luigi Data
 data/**
+
+.DS_Store
+**/.DS_Store
