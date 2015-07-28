@@ -37,7 +37,7 @@ class DownloadTrainerData(S3ToLocalTask):
   req_remote_path = luigi.Parameter(default='labs/trainers/twitter-actor.csv')
   req_key_file    = luigi.Parameter(default='/Users/felipeclopes/.ec2/encore')
 
-  s3_path     = luigi.Parameter(default='s3://encorealert-luigi-development/raw/twitter-actor.csv')
+  s3_path     = luigi.Parameter(default='s3://encorealert-luigi-development/actor_classification/raw/twitter-actor.csv')
   local_path  = luigi.Parameter(default='data/actor_classification/raw/twitter-actor.csv')  
 
   def requires(self):
@@ -187,9 +187,6 @@ class TrainRandomForestModel(luigi.Task):
                           'actor_statuses_count', 
                           'actor_verified',
                           'class',
-                          'tweet_hashtags_count',
-                          'tweet_mentions_count',
-                          'tweet_urls_count',
                           'manually_tweeting',
                           'followers_friends_ratio',
                           'favourites_friends_ratio',
@@ -204,10 +201,10 @@ class TrainRandomForestModel(luigi.Task):
                           'actor_listed_count', 
                           'actor_statuses_count', 
                           'actor_verified',
-                          'class',
                           'tweet_hashtags_count',
                           'tweet_mentions_count',
-                          'tweet_urls_count'
+                          'tweet_urls_count',
+                          'class'
                           ]
 
   manual_generators = ['Twitter Web Client', 
@@ -318,7 +315,7 @@ class DeployModel(luigi.Task):
   key_file = luigi.Parameter(default='/Users/felipeclopes/.ec2/encore')
   
   model_local_directory = luigi.Parameter(default='data/actor_classification/models/')
-  model_remote_directory = luigi.Parameter(default='/mnt/models/')
+  model_remote_directory = luigi.Parameter(default='/mnt/luigi/models/actor_classification/')
 
   def requires(self):
     return TrainRandomForestModel(self.date)
