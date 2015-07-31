@@ -311,7 +311,7 @@ class TrainRandomForestModel(luigi.Task):
 
 class DeployModel(luigi.Task):
   date = luigi.Parameter(default=datetime.today())
-  servers = luigi.Parameter(default=['root@staging.feed.encorealert.com'])
+  servers = luigi.Parameter(default='root@staging.feed.encorealert.com')
   key_file = luigi.Parameter(default='/Users/felipeclopes/.ec2/encore')
   
   model_local_directory = luigi.Parameter(default='data/actor_classification/models/')
@@ -324,7 +324,7 @@ class DeployModel(luigi.Task):
     return [RemoteTarget(self.model_path(self.model_remote_directory), host=server, key_file=self.key_file) for server in self.servers]
 
   def run(self):
-    for server in self.servers:
+    for server in self.servers.split(","):
       LocalToRemoteTask(host=server, remote_path=self.model_path(self.model_remote_directory), key_file=self.key_file, 
         local_path=self.model_path(self.model_local_directory)).run()
 
