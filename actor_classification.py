@@ -84,9 +84,10 @@ class EnrichTrainerData(luigi.Task):
     print(self.input_file())
     df = self.load_dataframe(self.input_file())
 
+    self.output()[0].makedirs()
     business_data = self.lookup_twitter_statuses(df[df['class'] == 'business'])
     self.persist_complete_data(self.output_file() + '.brand', business_data)
-
+    self.output()[1].makedirs()
     personal_data = self.lookup_twitter_statuses(df[df['class'] == 'personal'])
     self.persist_complete_data(self.output_file() + '.person', personal_data)
 
@@ -175,10 +176,11 @@ class EnrichTrainerData(luigi.Task):
 class TrainRandomForestModel(luigi.Task):
   date         = luigi.Parameter(default=datetime.today())
   start        = luigi.Parameter(default=datetime(2015,07,01))
-  s3_folder    = luigi.Parameter('s3://encorealert-luigi-development/actor_classification/csv/')
+  s3_csvs      = luigi.Parameter('s3://encorealert-luigi-development/actor_classification/csv/')
+  s3_models    = luigi.Parameter('s3://encorealert-luigi-development/actor_classification/models/')
   
-  local_folder = 'data/actor_classification/csv/'
-  directory    = 'data/actor_classification/models/'
+  local_csvs   = 'data/actor_classification/csv/'
+  local_model  = 'data/actor_classification/models/'
 
   tweets_features_cols = ['actor_favorites_count', 
                           'actor_followers_count', 
@@ -221,16 +223,16 @@ class TrainRandomForestModel(luigi.Task):
                      'Twitter for  Android']
 
   def requires(self):
-    yield [S3ToLocalTask(s3_path=self.s3_folder + s3_file, local_path=self.local_folder + s3_file) for s3_file in S3Client().list(path=self.s3_folder)]
+    yield [S3ToLocalTask(s3_path=self.s3_csvs + s3_file, local_path=self.local_csvs + s3_file) for s3_file in S3Client().list(path=self.s3_csvs)]
     yield RangeDailyBase(start=self.start, of='EnrichTrainerData')
 
   def output(self):
-    return LocalTarget(self.model_path())
+    return S3Target(self.date.strftime(self.s3_models + '.' + '%Y%m%d'))
 
   def run(self):
-    brands = self.concat_dataframes(self.local_folder + '*.brand')
+    brands = self.concat_dataframes(self.local_csvs + '*.brand')
     brands['class'] = 0
-    person = self.concat_dataframes(self.local_folder + '*.person')
+    person = self.concat_dataframes(self.local_csvs + '*.person')
     person['class'] = 1
 
     tweets = pd.concat([brands, person])
@@ -266,13 +268,19 @@ class TrainRandomForestModel(luigi.Task):
     score = forest.score(tweets[cols], tweets['class'])
     print 'final score: ', score
 
-    if not os.path.exists(self.directory):
-      os.makedirs(self.directory)
+    if not os.path.exists(self.local_model):
+      os.makedirs(self.local_model)
 
     joblib.dump(forest, self.model_path(), compress=9)
 
+    with open(self.model_path()) as model:
+      with self.output().open(mode='w') as s3_model:
+          s3_model.write(model.read())
+
+    os.remove(self.model_path())
+
   def model_path(self):
-    return self.directory + self.date.strftime('actor_classification_random_forest_%Y%m%d.pkl')
+    return self.local_model + self.date.strftime('actor_classification_random_forest_%Y%m%d.pkl')
     
   def actor_registration_from_now(self, registration):
     r = parser.parse(registration)
@@ -311,22 +319,17 @@ class TrainRandomForestModel(luigi.Task):
 
 class DeployModel(luigi.Task):
   date = luigi.Parameter(default=datetime.today())
-  servers = luigi.Parameter(default='root@staging.feed.encorealert.com')
-  key_file = luigi.Parameter(default='/Users/felipeclopes/.ec2/encore')
-  
-  model_local_directory = luigi.Parameter(default='data/actor_classification/models/')
-  model_remote_directory = luigi.Parameter(default='/mnt/luigi/models/actor_classification/')
+  server = luigi.Parameter()
+  model_local_directory = luigi.Parameter(default='data/actor_classification/deploy/')
 
   def requires(self):
     return TrainRandomForestModel(self.date)
 
   def output(self):
-    return [RemoteTarget(self.model_path(self.model_remote_directory), host=server, key_file=self.key_file) for server in self.servers]
+    return LocalTarget(self.model_path(self.model_local_directory))
 
   def run(self):
-    for server in self.servers.split(","):
-      LocalToRemoteTask(host=server, remote_path=self.model_path(self.model_remote_directory), key_file=self.key_file, 
-        local_path=self.model_path(self.model_local_directory)).run()
+    S3ToLocalTask(s3_path=self.input().path, local_path=self.model_path(self.model_local_directory)).run()
 
   def model_path(self, directory):
     return directory + self.date.strftime('actor_classification_random_forest_%Y%m%d.pkl')
