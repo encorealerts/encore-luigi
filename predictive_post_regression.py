@@ -78,7 +78,10 @@ class TrainRegression(luigi.Task):
           new_row = {"native_id": tweet}
 
           for i in range(1,110):
-            new_row = {"C{0}".format(i): ts[tweet][i]}
+            try:
+              new_row = {"C{0}".format(i): ts[tweet][i]}
+            except:
+              new_row = {"C{0}".format(i): 0}
 
           df.append(new_row)
       except:
