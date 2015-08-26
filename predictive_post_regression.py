@@ -3,141 +3,32 @@ import shutil
 
 import luigi
 from luigi import LocalTarget
-from luigi.s3 import S3Target, S3Client
+from luigi.s3 import S3Target
 from luigi.contrib.esindex import ElasticsearchTarget
 from luigi.parameter import Parameter
 from luigi.tools.range import RangeDailyBase
 from luigi.contrib.ssh import RemoteTarget
 
-from transfer import RemoteToS3Task, S3ToLocalTask, LocalToS3Task, LocalToRemoteTask
+from elasticsearch import Elasticsearch
+from transfer import S3ToLocalTask
 
 import pandas as pd
 import numpy as np
-
-import glob
 import time
-import re
-import csv
+from datetime import datetime
 
 from sklearn.linear_model import LinearRegression
 from sklearn.grid_search import GridSearchCV
-
 from sklearn.externals import joblib
-
-from dateutil import relativedelta
-from dateutil import parser
-from datetime import datetime
-from dateutil.tz import tzlocal
-
-class LoadTrainingData(S3ToLocalTask):
-  date = luigi.DateParameter()
-  
-  req_remote_host = luigi.Parameter(default='ubuntu@ec2-23-21-255-214.compute-1.amazonaws.com')
-  req_remote_path = luigi.Parameter(default='labs/trainers/time_series_popular_tweets.csv')
-  req_key_file    = luigi.Parameter(default='/Users/felipeclopes/.ec2/encore') #?????????
-
-  s3_path     = luigi.Parameter(default='s3://encorealert-luigi-development/predictive_post_regression/raw/time_series_popular_tweets.csv')
-  local_path  = luigi.Parameter(default='data/predictive_post_regression/raw/time_series_popular_tweets.csv')  
-
-  def requires(self):
-    return RemoteToS3Task(host=self.req_remote_host, 
-      remote_path=self.date.strftime(self.req_remote_path + '.' + '%Y%m%d'), 
-      s3_path=self.date.strftime(self.s3_path + '.' + '%Y%m%d'), 
-      key_file=self.req_key_file)
-
-  def input_target(self):
-    return S3Target(self.date.strftime(self.s3_path + '.' + '%Y%m%d'), client=self._get_s3_client())
-
-  def output_target(self):
-    return LocalTarget(self.date.strftime(self.local_path + '.' + '%Y%m%d'))
-
-class EnrichTrainingData(luigi.Task):
-  date = luigi.DateParameter()
-  
-  input_prefix = 'data/predictive_post_regression/raw/time_series_popular_tweets.csv'
-  output_prefix = 'data/predictive_post_regression/csv/enriched-time_series_popular_tweets.csv'
-
-  token = luigi.Parameter(default='22911906-GR7LBJ2oil3cc27aUIAln4zur4F7CdKAKyEi6NDzi')
-  token_key = luigi.Parameter(default='FZbyPm1i3BMfiXKlKPuzBdRlvbenW09n8LX5OvgM85g')
-  con_secret = luigi.Parameter(default='cyZ6NLdySvTkhKGUGmXMKw')
-  con_secret_key = luigi.Parameter(default='5UgOJOanohNPMVkfLY85CjzdMcNAAVBlRCyGYys')
-
-  def input(self):
-    return LocalTarget(self.input_file())
-
-  def output(self):
-    return [LocalTarget(self.output_file())]
-
-  def input_file(self):
-    return self.date.strftime(self.input_prefix + '.' + '%Y%m%d')
-
-  def output_file(self):
-    return self.date.strftime(self.output_prefix + '.' + '%Y%m%d')
-
-  def requires(self):
-    return LoadTrainingData(self.date)
-
-  def run(self):
-    input_file = self.date.strftime(self.input_prefix + '.' + '%Y%m%d')
-    output_file = self.date.strftime(self.output_prefix + '.' + '%Y%m%d')
-
-    print self.input_file()
-    df = self.load_dataframe(self.input_file())
-    df = self.enrich_dataframe(df)
-
-    self.output()[0].makedirs()
-    df.to_csv(self.output_file(), index=False)
-
-  def load_dataframe(self, full_name):
-    df_cols = map(lambda c: "C"+str(c), range(1,110))
-    cols_names = ["native_id"] + df_cols
-
-    dtype = {}
-    for c in df_cols:
-        dtype[c] = np.int32
-
-    return pd.read_csv('data/time_series_popular_tweets_all_crop_100.csv', 
-                       dtype=dtype, header=None, names=cols_names)
-
-  def enrich_dataframe(self, df):
-    nrows = len(df)
-
-    # Calculate mean values for each activity
-    mean_col = pd.Series(map(lambda i: (df.T)[i].values[1:].mean(), range(nrows)), index=range(nrows))
-
-    # Calculate median values for each activity
-    median_col = pd.Series(map(lambda i: np.median((df.T)[i].values[1:]), range(nrows)), index=range(nrows))
-
-    # Calculate min values for each activity
-    min_col = pd.Series(map(lambda i: (df.T)[i].values[1:].min(), range(nrows)), index=range(nrows))
-
-    # Calculate max values for each activity
-    max_col = pd.Series(map(lambda i: (df.T)[i].values[1:].max(), range(nrows)), index=range(nrows))
-
-    # Calculate total retweets for each activity
-    total_col = pd.Series(map(lambda i: sum((df.T)[i].values[1:]), range(nrows)), index=range(nrows))
-
-    df["mean"]   = mean_col
-    df["median"] = median_col
-    df["min"]    = min_col
-    df["max"]    = max_col
-    df["total"]  = total_col
-
-    return df
 
 class TrainRegression(luigi.Task):
   date         = luigi.Parameter(default=datetime.today())
   start        = luigi.Parameter(default=datetime(2015,07,01))
   
-  s3_csvs      = luigi.Parameter('s3://encorealert-luigi-development/predictive_post_regression/csv/')
   s3_models    = luigi.Parameter('s3://encorealert-luigi-development/predictive_post_regression/models/')
-  
-  local_csvs   = 'data/predictive_post_regression/csv/'
   local_path   = 'data/predictive_post_regression/models/'
 
-  def requires(self):
-    yield [S3ToLocalTask(s3_path=self.s3_csvs + s3_file, local_path=self.local_csvs + s3_file) for s3_file in S3Client().list(path=self.s3_csvs)]
-    yield RangeDailyBase(start=self.start, of='EnrichTrainingData')
+  es = Elasticsearch()
 
   def output(self):
     return {
@@ -145,7 +36,7 @@ class TrainRegression(luigi.Task):
       }
 
   def run(self):
-    time_series_retweets = self.concat_dataframes(self.local_csvs + '*')
+    time_series_retweets = self.enrich_data(self.load_data())
 
     X = np.array(time_series_retweets.drop(["native_id","min","max","median","total"], axis=1))
     y = time_series_retweets.total.values
@@ -168,16 +59,147 @@ class TrainRegression(luigi.Task):
   def model_path(self, directory):
     return directory + self.date.strftime('predictive_post_regression_lr_model_%Y%m%d.pkl')
 
-  def concat_dataframes(self, wildcard):
-    files = glob.glob(wildcard)
-    dfs = []
-    for file in files:
-      print '- Parsing csv:', file
-      df = pd.read_csv(file, engine='python', encoding='utf-8')
-      dfs.append(df)
-      print '# Loaded', file, 'with', len(df), 'lines.'
-    full = pd.concat(dfs)
-    return full
+  def load_data(self):
+    df_cols = map(lambda c: "C"+str(c), range(1,110))
+    cols_names = ["native_id"] + df_cols
+
+    dtype = {}
+    for c in df_cols:
+        dtype[c] = np.int32
+
+    df = DataFrame(columns=cols_names, dtype=dtype)
+
+    # TODO Load from ElasticSearch
+    for f in range(200):
+      try:
+        ts = time_series_for_retweets(most_retweeted_tweets(from + f.days))
+
+        for tweet in ts.keys():
+          new_row = {"native_id": tweet}
+
+          for i in range(1,110):
+            new_row = {"C{0}".format(i): ts[tweet][i]}
+
+          df.append(new_row)
+      except:
+        print "Some Error while processing time series for retweets"
+
+
+  def enrich_data(self, df):
+
+    nrows = len(df)
+    idx = range(nrows)
+
+    time_series_for_row = lambda i: (df.T)[i].values[1:]
+
+    mean_col   = pd.Series(map(lambda i: time_series_for_row(i).mean(), idx), index=idx)
+    median_col = pd.Series(map(lambda i: np.median(time_series_for_row(i)), idx), index=idx)
+    min_col    = pd.Series(map(lambda i: time_series_for_row(i).min(), idx), index=idx)
+    max_col    = pd.Series(map(lambda i: time_series_for_row(i).max(), idx), index=idx)
+    total_col  = pd.Series(map(lambda i: sum(time_series_for_row(i)), idx), index=idx)
+
+    df["mean"]   = mean_col
+    df["median"] = median_col
+    df["min"]    = min_col
+    df["max"]    = max_col
+    df["total"]  = total_col
+
+    return df
+
+  def most_retweeted_tweets(from, shared_field="shared_native_id", n_tweets=10, threshold = 500):
+
+    from = from.truncate('day')
+    to   = from.next_day(1)
+
+    # Elastic Search query
+    body_search = {
+      "from": 0,
+      "size": n_tweets,
+      "query": {
+        "bool": {
+          "must": [
+            { "range": { "created_at": { "from": from, "to": to } } }
+          ]
+        }
+      },
+      "aggs": {
+        "retweeted_activities": {
+          "terms": { "field": shared_field}
+        }
+      }
+    }
+
+    # Query execution
+    search = self.es.search(
+      index = self.activities_indexes(from, to),
+      search_type = 'count',
+      body  = body_search
+    )
+
+    # Query return map for relevant values
+    most_retweeted = filter(lambda b: b["doc_count"] > threshold, search['aggregations']['retweeted_activities']['buckets'])
+
+    return map(lambda e: e["key"],most_retweeted)
+
+  def time_series_for_retweets(tweets_ids):
+
+    time_series_per_popular_tweet = {}
+
+    for tweet_id in tweets_ids:
+
+      from  = Activity.where(native_id: tweet_id).first.created_at.to_datetime.utc # TODO Parse this code to Python somehow
+      to    = from + datetime.timedelta(hours=1)
+
+      # Elastic Search query
+      body_search = {
+        "query": {
+          "bool": {
+            "must": [
+              { "range": { "created_at": { "from": from, "to": to } } },
+              { "term": { "verb": 'share' } },
+              { "term": { "shared_native_id": tweet_id } }
+            ]
+          }
+        },
+        "aggs": {
+          "activities_per_timeframe": {
+            "date_histogram": {
+              "field": "created_at",
+              "interval": "5s",
+              "format": "yyyy-MM-dd HH:mm:ss",
+              "min_doc_count": 0
+            }
+          }
+        }
+      }
+
+      # Query execution
+      search = self.es.search(
+        index = self.activities_indexes(from, to),
+        search_type = 'count',
+        body = body_search
+      )
+
+      # Query return map for relevant values
+      search = map(lambda b: b["doc_count"], search['aggregations']['activities_per_timeframe']['buckets'])
+
+      sum_counts = sum(search)
+      if sum_counts is not None and sum_counts > 0:
+        time_series_per_popular_tweet[tweet_id] = search
+
+    return time_series_per_popular_tweet
+
+  def activities_indexes(from, to=None)
+    a = from.isocalendar()[1]
+    b = a if to is None else to.isocalendar()[1]
+    week_label = lambda w: "activities_week_{0}".format(w)
+    if a <= b:
+      indices  = map(week_label, range(a,b+1))
+    else:
+      indices  = map(week_label, range(a, 53))
+      indices += map(week_label, range(1,b+1))
+
+    return indices
 
 class DeployModel(luigi.Task):
   date = luigi.Parameter(default=datetime.today())
