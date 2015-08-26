@@ -146,46 +146,58 @@ class TrainRegression(luigi.Task):
     time_series_per_popular_tweet = {}
 
     for tweet_id in tweets_ids:
+      try:
+        # Obtain created_at
+        body_search = { "query": { "bool": { "must": [ { "term": { "native_id": tweet_id } } ] } } }
+        search = $elasticsearch.search(
+          index: ElasticSearch.activities_indexes(4.months.ago.to_datetime, DateTime.now),
+          body: body_search
+        )
+        created_at_str = search["hits"]["hits"][0]["_source"]["created_at"] # ex: "2015-06-22T23:27:06.000Z"
 
-      from  = Activity.where(native_id: tweet_id).first.created_at.to_datetime.utc # TODO Parse this code to Python somehow
-      to    = from + datetime.timedelta(hours=1)
+        from  = datetime.strptime(created_at_str[:10], '%Y-%m-%d')
+        to    = from + datetime.timedelta(hours=1)
 
-      # Elastic Search query
-      body_search = {
-        "query": {
-          "bool": {
-            "must": [
-              { "range": { "created_at": { "from": from, "to": to } } },
-              { "term": { "verb": 'share' } },
-              { "term": { "shared_native_id": tweet_id } }
-            ]
-          }
-        },
-        "aggs": {
-          "activities_per_timeframe": {
-            "date_histogram": {
-              "field": "created_at",
-              "interval": "5s",
-              "format": "yyyy-MM-dd HH:mm:ss",
-              "min_doc_count": 0
+        # Elastic Search query
+        body_search = {
+          "query": {
+            "bool": {
+              "must": [
+                { "range": { "created_at": { "from": from, "to": to } } },
+                { "term": { "verb": 'share' } },
+                { "term": { "shared_native_id": tweet_id } }
+              ]
+            }
+          },
+          "aggs": {
+            "activities_per_timeframe": {
+              "date_histogram": {
+                "field": "created_at",
+                "interval": "5s",
+                "format": "yyyy-MM-dd HH:mm:ss",
+                "min_doc_count": 0
+              }
             }
           }
         }
-      }
 
-      # Query execution
-      search = self.es.search(
-        index = self.activities_indexes(from, to),
-        search_type = 'count',
-        body = body_search
-      )
+        # Query execution
+        search = self.es.search(
+          index = self.activities_indexes(from, to),
+          search_type = 'count',
+          body = body_search
+        )
 
-      # Query return map for relevant values
-      search = map(lambda b: b["doc_count"], search['aggregations']['activities_per_timeframe']['buckets'])
+        # Query return map for relevant values
+        search = map(lambda b: b["doc_count"], search['aggregations']['activities_per_timeframe']['buckets'])
 
-      sum_counts = sum(search)
-      if sum_counts is not None and sum_counts > 0:
-        time_series_per_popular_tweet[tweet_id] = search
+        sum_counts = sum(search)
+        if sum_counts is not None and sum_counts > 0:
+          time_series_per_popular_tweet[tweet_id] = search
+      except  Exception as e:
+        print type(e)
+        print e.args
+        print "Error with native_id: " + tweet_id
 
     return time_series_per_popular_tweet
 
