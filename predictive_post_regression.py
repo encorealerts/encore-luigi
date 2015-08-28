@@ -15,7 +15,7 @@ from transfer import S3ToLocalTask
 import pandas as pd
 import numpy as np
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sklearn.linear_model import LinearRegression
 from sklearn.grid_search import GridSearchCV
@@ -29,6 +29,8 @@ class TrainRegression(luigi.Task):
   local_path   = 'data/predictive_post_regression/models/'
 
   es = Elasticsearch()
+
+  START_DATE = datetime.now() - timedelta(days=120)
 
   def output(self):
     return {
@@ -69,10 +71,12 @@ class TrainRegression(luigi.Task):
 
     df = DataFrame(columns=cols_names, dtype=dtype)
 
+    date_from = self.START_DATE
+
     # TODO Load from ElasticSearch
     for f in range(200):
       try:
-        ts = time_series_for_retweets(most_retweeted_tweets(from + f.days))
+        ts = time_series_for_retweets(most_retweeted_tweets(date_from + timedelta(days=f)))
 
         for tweet in ts.keys():
           new_row = {"native_id": tweet}
@@ -109,10 +113,10 @@ class TrainRegression(luigi.Task):
 
     return df
 
-  def most_retweeted_tweets(from, shared_field="shared_native_id", n_tweets=10, threshold = 500):
+  def most_retweeted_tweets(date_from, n_tweets=10, threshold = 500):
 
-    from = from.truncate('day')
-    to   = from.next_day(1)
+    date_from = date_from.truncate('day')
+    to   = date_from.next_day(1)
 
     # Elastic Search query
     body_search = {
@@ -121,20 +125,20 @@ class TrainRegression(luigi.Task):
       "query": {
         "bool": {
           "must": [
-            { "range": { "created_at": { "from": from, "to": to } } }
+            { "range": { "created_at": { "from": date_from, "to": to } } }
           ]
         }
       },
       "aggs": {
         "retweeted_activities": {
-          "terms": { "field": shared_field}
+          "terms": { "field": "shared_native_id"}
         }
       }
     }
 
     # Query execution
     search = self.es.search(
-      index = self.activities_indexes(from, to),
+      index = self.activities_indexes(date_from, to),
       search_type = 'count',
       body  = body_search
     )
@@ -152,21 +156,21 @@ class TrainRegression(luigi.Task):
       try:
         # Obtain created_at
         body_search = { "query": { "bool": { "must": [ { "term": { "native_id": tweet_id } } ] } } }
-        search = $elasticsearch.search(
-          index: ElasticSearch.activities_indexes(4.months.ago.to_datetime, DateTime.now),
-          body: body_search
+        search = self.es.search(
+          index = ElasticSearch.activities_indexes(self.START_DATE, datetime.now()),
+          body  = body_search
         )
         created_at_str = search["hits"]["hits"][0]["_source"]["created_at"] # ex: "2015-06-22T23:27:06.000Z"
 
-        from  = datetime.strptime(created_at_str[:10], '%Y-%m-%d')
-        to    = from + datetime.timedelta(hours=1)
+        date_from  = datetime.strptime(created_at_str[:10], '%Y-%m-%d')
+        to    = date_from + timedelta(hours=1)
 
         # Elastic Search query
         body_search = {
           "query": {
             "bool": {
               "must": [
-                { "range": { "created_at": { "from": from, "to": to } } },
+                { "range": { "created_at": { "from": date_from, "to": to } } },
                 { "term": { "verb": 'share' } },
                 { "term": { "shared_native_id": tweet_id } }
               ]
@@ -186,7 +190,7 @@ class TrainRegression(luigi.Task):
 
         # Query execution
         search = self.es.search(
-          index = self.activities_indexes(from, to),
+          index = self.activities_indexes(date_from, to),
           search_type = 'count',
           body = body_search
         )
@@ -204,8 +208,8 @@ class TrainRegression(luigi.Task):
 
     return time_series_per_popular_tweet
 
-  def activities_indexes(from, to=None)
-    a = from.isocalendar()[1]
+  def activities_indexes(date_from, to=None):
+    a = date_from.isocalendar()[1]
     b = a if to is None else to.isocalendar()[1]
     week_label = lambda w: "activities_week_{0}".format(w)
     if a <= b:
