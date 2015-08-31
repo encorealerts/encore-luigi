@@ -21,7 +21,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.grid_search import GridSearchCV
 from sklearn.externals import joblib
 
-class TrainRegression(luigi.Task):
+class TrainRegressionModel(luigi.Task):
   date         = luigi.Parameter(default=datetime.today())
   start        = luigi.Parameter(default=datetime(2015,07,01))
   
@@ -226,7 +226,7 @@ class DeployModel(luigi.Task):
   model_local_directory = 'data/predictive_post_regression/deploy/'
 
   def requires(self):
-    return TrainRegression(self.date)
+    return TrainRegressionModel(self.date)
 
   def output(self):
     for name in self.input():
