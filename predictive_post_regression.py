@@ -1,4 +1,5 @@
 import os
+import sys
 import shutil
 
 import luigi
@@ -9,6 +10,7 @@ from luigi.parameter import Parameter
 from luigi.tools.range import RangeDailyBase
 from luigi.contrib.ssh import RemoteTarget
 
+import elasticsearch
 from elasticsearch import Elasticsearch
 from transfer import S3ToLocalTask
 
@@ -40,8 +42,8 @@ class TrainRegressionModel(luigi.Task):
   def run(self):
     time_series_retweets = self.enrich_data(self.load_data())
 
-    X = np.array(time_series_retweets.drop(["native_id","min","max","median","total"], axis=1))
     y = time_series_retweets.total.values
+    X = np.array(time_series_retweets.drop(["native_id","min","max","median","total"], axis=1))
         
     lr_model = LinearRegression()
     lr_model.fit(X, y)
@@ -65,18 +67,18 @@ class TrainRegressionModel(luigi.Task):
     df_cols = map(lambda c: "C"+str(c), range(1,110))
     cols_names = ["native_id"] + df_cols
 
-    dtype = {}
-    for c in df_cols:
-        dtype[c] = np.int32
+    # dtype = {}
+    # for c in df_cols:
+    #     dtype[c] = np.int32
 
-    df = DataFrame(columns=cols_names, dtype=dtype)
+    df = pd.DataFrame(columns=cols_names)#, dtype=dtype)
 
     date_from = self.START_DATE
 
     # TODO Load from ElasticSearch
     for f in range(200):
       try:
-        ts = time_series_for_retweets(most_retweeted_tweets(date_from + timedelta(days=f)))
+        ts = self.time_series_for_retweets(self.most_retweeted_tweets(date_from + timedelta(days=f)))
 
         for tweet in ts.keys():
           new_row = {"native_id": tweet}
@@ -89,7 +91,11 @@ class TrainRegressionModel(luigi.Task):
 
           df.append(new_row)
       except:
-        print "Some Error while processing time series for retweets"
+        msg = str(sys.exc_info()[0])
+        if not "elasticsearch.exceptions.NotFoundError" in msg:
+          print "An error occurred while trying to read from ElasticSearch: " + str(sys.exc_info()[0])
+
+    return df
 
 
   def enrich_data(self, df):
@@ -113,10 +119,10 @@ class TrainRegressionModel(luigi.Task):
 
     return df
 
-  def most_retweeted_tweets(date_from, n_tweets=10, threshold = 500):
+  def most_retweeted_tweets(self, date_from, n_tweets=10, threshold = 500):
 
-    date_from = date_from.truncate('day')
-    to   = date_from.next_day(1)
+    date_from = date_from.date()
+    to   = date_from + timedelta(days=1)
 
     # Elastic Search query
     body_search = {
@@ -146,21 +152,48 @@ class TrainRegressionModel(luigi.Task):
     # Query return map for relevant values
     most_retweeted = filter(lambda b: b["doc_count"] > threshold, search['aggregations']['retweeted_activities']['buckets'])
 
-    return map(lambda e: e["key"],most_retweeted)
+    native_ids = map(lambda e: e["key"],most_retweeted)
 
-  def time_series_for_retweets(tweets_ids):
+    # for native_id in native_ids:
+    #   print "####### native_ids (begin) ########"
+    #   print "Index: " + str(self.activities_indexes(date_from, to))
+    #   print native_ids
+
+    return native_ids
+
+  def time_series_for_retweets(self, tweets_ids):
 
     time_series_per_popular_tweet = {}
 
+    passed = 0
+
     for tweet_id in tweets_ids:
       try:
+        created_at_str = None
         # Obtain created_at
-        body_search = { "query": { "bool": { "must": [ { "term": { "native_id": tweet_id } } ] } } }
-        search = self.es.search(
-          index = ElasticSearch.activities_indexes(self.START_DATE, datetime.now()),
-          body  = body_search
-        )
-        created_at_str = search["hits"]["hits"][0]["_source"]["created_at"] # ex: "2015-06-22T23:27:06.000Z"
+        #tweet_id = "635954756800786433"
+        for w in range(1,54):
+          try:
+            body_search = { "query": { "bool": { "must": [ { "term": { "native_id": tweet_id } } ] } } }
+            search = self.es.search(
+              index = "activities_week_{0}".format(w),
+              body  = body_search
+            )
+
+            created_at_str = search["hits"]["hits"][0]["_source"]["created_at"] # ex: "2015-06-22T23:27:06.000Z"
+
+            break
+          except:
+            None
+
+        if created_at_str == None:
+          continue
+
+        passed += 1
+        print "####### created_at (begin) ########"
+        print passed
+        print created_at_str
+        print "####### created_at (end) ########"
 
         date_from  = datetime.strptime(created_at_str[:10], '%Y-%m-%d')
         to    = date_from + timedelta(hours=1)
@@ -201,14 +234,16 @@ class TrainRegressionModel(luigi.Task):
         sum_counts = sum(search)
         if sum_counts is not None and sum_counts > 0:
           time_series_per_popular_tweet[tweet_id] = search
-      except  Exception as e:
-        print type(e)
-        print e.args
-        print "Error with native_id: " + tweet_id
+      except Exception as e:
+        if type(e) != elasticsearch.exceptions.NotFoundError:
+          print type(e)
+          print e.args
+          print "Error with native_id: " + tweet_id
+          raise
 
     return time_series_per_popular_tweet
 
-  def activities_indexes(date_from, to=None):
+  def activities_indexes(self, date_from, to=None):
     a = date_from.isocalendar()[1]
     b = a if to is None else to.isocalendar()[1]
     week_label = lambda w: "activities_week_{0}".format(w)
