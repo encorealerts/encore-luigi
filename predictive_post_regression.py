@@ -67,33 +67,29 @@ class TrainRegressionModel(luigi.Task):
     df_cols = map(lambda c: "C"+str(c), range(1,110))
     cols_names = ["native_id"] + df_cols
 
-    # dtype = {}
-    # for c in df_cols:
-    #     dtype[c] = np.int32
+    df = pd.DataFrame(columns=cols_names)
 
-    df = pd.DataFrame(columns=cols_names)#, dtype=dtype)
+    # Load from ElasticSearch
+    for w in range(1,54): # For each data index
+      ts = self.time_series_for_retweets(self.most_retweeted_tweets(w),w)
 
-    date_from = self.START_DATE
+      #print "####### Tweets: {0} ########".format(str(ts.keys()))
 
-    # TODO Load from ElasticSearch
-    for f in range(200):
-      try:
-        ts = self.time_series_for_retweets(self.most_retweeted_tweets(date_from + timedelta(days=f)))
+      for tweet in ts.keys():
+        new_row = {"native_id": tweet}
 
-        for tweet in ts.keys():
-          new_row = {"native_id": tweet}
+        for i in range(1,110):
+          try:
+            new_row["C{0}".format(i)] = ts[tweet][i]
+          except:
+            new_row["C{0}".format(i)] = 0
 
-          for i in range(1,110):
-            try:
-              new_row = {"C{0}".format(i): ts[tweet][i]}
-            except:
-              new_row = {"C{0}".format(i): 0}
+        #new_row = pd.DataFrame(new_row)
+        df.append(new_row)
 
-          df.append(new_row)
-      except:
-        msg = str(sys.exc_info()[0])
-        if not "elasticsearch.exceptions.NotFoundError" in msg:
-          print "An error occurred while trying to read from ElasticSearch: " + str(sys.exc_info()[0])
+    print "####### df ########"
+    print len(df)
+    print "####### df ########"
 
     return df
 
@@ -119,91 +115,50 @@ class TrainRegressionModel(luigi.Task):
 
     return df
 
-  def most_retweeted_tweets(self, date_from, n_tweets=10, threshold = 500):
-
-    date_from = date_from.date()
-    to   = date_from + timedelta(days=1)
-
-    # Elastic Search query
-    body_search = {
-      "from": 0,
-      "size": n_tweets,
-      "query": {
-        "bool": {
-          "must": [
-            { "range": { "created_at": { "from": date_from, "to": to } } }
-          ]
-        }
-      },
-      "aggs": {
-        "retweeted_activities": {
-          "terms": { "field": "shared_native_id"}
+  def most_retweeted_tweets(self, w, n_tweets=10, threshold = 500):
+    native_ids = []
+    try:
+      # Elastic Search query
+      body_search = {
+        "from": 0,
+        "size": n_tweets,
+        "aggs": {
+          "retweeted_activities": {
+            "terms": { "field": "shared_native_id"}
+          }
         }
       }
-    }
 
-    # Query execution
-    search = self.es.search(
-      index = self.activities_indexes(date_from, to),
-      search_type = 'count',
-      body  = body_search
-    )
+      # Query execution
+      search = self.es.search(
+        index = "activities_week_{0}".format(w),
+        search_type = 'count',
+        body  = body_search
+      )
 
-    # Query return map for relevant values
-    most_retweeted = filter(lambda b: b["doc_count"] > threshold, search['aggregations']['retweeted_activities']['buckets'])
+      # Query return map for relevant values
+      most_retweeted = filter(lambda b: b["doc_count"] > threshold, search['aggregations']['retweeted_activities']['buckets'])
 
-    native_ids = map(lambda e: e["key"],most_retweeted)
-
-    # for native_id in native_ids:
-    #   print "####### native_ids (begin) ########"
-    #   print "Index: " + str(self.activities_indexes(date_from, to))
-    #   print native_ids
+      native_ids = map(lambda e: e["key"], most_retweeted)
+    except Exception as e:
+      if type(e) != elasticsearch.exceptions.NotFoundError:
+        print "####### Error with index: {0} ########".format(w)
+        print type(e)
+        print e.args
 
     return native_ids
 
-  def time_series_for_retweets(self, tweets_ids):
+  def time_series_for_retweets(self, tweets_ids, w):
 
     time_series_per_popular_tweet = {}
 
-    passed = 0
-
     for tweet_id in tweets_ids:
       try:
-        created_at_str = None
-        # Obtain created_at
-        #tweet_id = "635954756800786433"
-        for w in range(1,54):
-          try:
-            body_search = { "query": { "bool": { "must": [ { "term": { "native_id": tweet_id } } ] } } }
-            search = self.es.search(
-              index = "activities_week_{0}".format(w),
-              body  = body_search
-            )
-
-            created_at_str = search["hits"]["hits"][0]["_source"]["created_at"] # ex: "2015-06-22T23:27:06.000Z"
-
-            break
-          except:
-            None
-
-        if created_at_str == None:
-          continue
-
-        passed += 1
-        print "####### created_at (begin) ########"
-        print passed
-        print created_at_str
-        print "####### created_at (end) ########"
-
-        date_from  = datetime.strptime(created_at_str[:10], '%Y-%m-%d')
-        to    = date_from + timedelta(hours=1)
-
         # Elastic Search query
         body_search = {
           "query": {
             "bool": {
               "must": [
-                { "range": { "created_at": { "from": date_from, "to": to } } },
                 { "term": { "verb": 'share' } },
                 { "term": { "shared_native_id": tweet_id } }
               ]
@@ -223,7 +178,7 @@ class TrainRegressionModel(luigi.Task):
 
         # Query execution
         search = self.es.search(
-          index = self.activities_indexes(date_from, to),
+          index = "activities_week_{0}".format(w),
           search_type = 'count',
           body = body_search
         )
@@ -236,10 +191,9 @@ class TrainRegressionModel(luigi.Task):
           time_series_per_popular_tweet[tweet_id] = search
       except Exception as e:
         if type(e) != elasticsearch.exceptions.NotFoundError:
+          print "Error with native_id: " + tweet_id
           print type(e)
           print e.args
-          print "Error with native_id: " + tweet_id
-          raise
 
     return time_series_per_popular_tweet
 
