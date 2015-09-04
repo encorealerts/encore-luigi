@@ -46,10 +46,10 @@ class AggregateToRedis(luigi.Task):
     redis_client = self.redis_client()
     for (_max, avg, std, count, rule) in cursor:
       print '_max:', _max, 'avg', avg, 'std', std, 'count', count, 'rule', rule
-      redis_client.hset("predictive-post-%s" % rule, 'max', _max)
-      redis_client.hset("predictive-post-%s" % rule, 'avg', avg)
-      redis_client.hset("predictive-post-%s" % rule, 'std', std)
-      redis_client.hset("predictive-post-%s" % rule, 'count', count)
+      redis_client.hset("encore:predictive-post-%s" % rule, 'max', _max)
+      redis_client.hset("encore:predictive-post-%s" % rule, 'avg', avg)
+      redis_client.hset("encore:predictive-post-%s" % rule, 'std', std)
+      redis_client.hset("encore:predictive-post-%s" % rule, 'count', count)
 
     self.output().touch()
 
