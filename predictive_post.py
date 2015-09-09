@@ -30,7 +30,7 @@ class ConfigsToAggregation(luigi.Task):
 
     date = datetime.today() - timedelta(days=5)
 
-    return map(lambda rule_id, segment: AggregateToRedis(date=date, rule_id=rule_id, segment=segment), 
+    return map(lambda (rule_id, segment): AggregateToRedis(date=date, rule_id=rule_id, segment=segment), 
                cursor)
 
   def connect(self):
@@ -77,7 +77,7 @@ class AggregateToRedis(luigi.Task):
     return LocalTarget(self.input_file())
 
   def output(self):
-    update_id = "{0}-{1}".format(self.date.strftime("%Y%m%d%H"), rule_id)
+    update_id = "{0}-{1}".format(self.date.strftime("%Y%m%d%H"), self.rule_id)
     return MySqlTarget(host=self.db_host, 
                        database=self.db_database, 
                        user=self.db_user, 
