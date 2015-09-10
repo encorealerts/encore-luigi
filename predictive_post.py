@@ -57,17 +57,23 @@ class AggregateToRedis(luigi.Task):
   rule_id = luigi.Parameter()
   segment = luigi.Parameter()
 
-  query =  "SELECT MAX(engagement_score) as max_engagement, \
-              AVG(engagement_score) as avg_engagement, \
-              STD(engagement_score) as std_engagement, \
-              COUNT(engagement_score) as count, \
-              rule_id as rule_id \
+  query =  "SELECT MAX(p.engagement_score) as max_engagement, \
+              AVG(p.engagement_score) as avg_engagement, \
+              STD(p.engagement_score) as std_engagement, \
+              COUNT(p.engagement_score) as count, \
+              p.rule_id as rule_id \
             FROM \
-              predictive_post_data \
+              predictive_post_data as p, \
+              activities as at, \
+              actors as ac \
             WHERE \
-              created_at > DATE(%(date)s) \
+              p.native_id = at.native_id \
             AND \
-              rule_id = %(rule_id)d \
+              at.actor_id  = ac.id \
+            AND \
+              p.created_at > DATE('%(date)s') \
+            AND \
+              p.rule_id = %(rule_id)d \
             AND \
               %(segment_clause)s \
             GROUP BY \
@@ -90,11 +96,15 @@ class AggregateToRedis(luigi.Task):
     connection = self.connect()
     cursor = connection.cursor(buffered=True)
 
-    segment_clause = "segment = segment" if self.segment == None else "segment = '{0}'".format(self.segment)
+    segment_clause = "ac.segment = ac.segment" if self.segment == None else "ac.segment = '{0}'".format(self.segment)
 
-    cursor.execute(self.query, {'date':    self.date, 
+    query = self.query % {'date':    self.date, 
                                 'rule_id': self.rule_id, 
-                                'segment_clause': segment_clause})
+                                'segment_clause': segment_clause}
+
+    print query
+
+    cursor.execute(query)
 
     redis_client = self.redis_client()
     for (_max, avg, std, count, rule) in cursor:
