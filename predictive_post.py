@@ -63,14 +63,12 @@ class AggregateToRedis(luigi.Task):
               COUNT(p.engagement_score) as count, \
               p.rule_id as rule_id \
             FROM \
-              predictive_post_data as p, \
-              activities as at, \
-              actors as ac \
+              predictive_post_data p \
+            JOIN \
+              activities at ON p.native_id = at.native_id \
+            JOIN \
+              actors ac ON at.actor_id = ac.id  \
             WHERE \
-              p.native_id = at.native_id \
-            AND \
-              at.actor_id  = ac.id \
-            AND \
               p.created_at > DATE('%(date)s') \
             AND \
               p.rule_id = %(rule_id)d \
