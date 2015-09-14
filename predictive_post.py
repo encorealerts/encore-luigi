@@ -74,7 +74,6 @@ class AggregateToRedis(luigi.Task):
               p.created_at > DATE('%(date)s') \
             AND \
               p.rule_id = %(rule_id)d \
-            AND \
               %(segment_clause)s \
             GROUP BY \
               rule_id "
@@ -96,13 +95,11 @@ class AggregateToRedis(luigi.Task):
     connection = self.connect()
     cursor = connection.cursor(buffered=True)
 
-    segment_clause = "ac.segment = ac.segment" if self.segment == None else "ac.segment = '{0}'".format(self.segment)
+    segment_clause = "" if self.segment == None else "AND (ac.segment = '{0}' OR ac.segment IS NULL)".format(self.segment)
 
     query = self.query % {'date':    self.date, 
                                 'rule_id': self.rule_id, 
                                 'segment_clause': segment_clause}
-
-    print query
 
     cursor.execute(query)
 
