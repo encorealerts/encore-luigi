@@ -18,7 +18,7 @@ class ConfigsToAggregation(luigi.Task):
   db_user     = luigi.configuration.get_config().get('mysql', 'user', 'root')
   db_password = luigi.configuration.get_config().get('mysql', 'password', '')
 
-  query =  "SELECT rule_id as rule_id, \
+  query =  "SELECT rule_id as rule, \
               segment as segment \
             FROM \
               predictive_post_configurations" 
@@ -30,7 +30,7 @@ class ConfigsToAggregation(luigi.Task):
 
     date = datetime.today() - timedelta(days=5)
 
-    return map(lambda (rule_id, segment): AggregateToRedis(date=date, rule_id=rule_id, segment=segment), 
+    return map(lambda (rule, segment): AggregateToRedis(date=date, rule=rule, segment=segment), 
                cursor)
 
   def connect(self):
@@ -54,7 +54,7 @@ class AggregateToRedis(luigi.Task):
   redis_db    = luigi.configuration.get_config().get('redis', 'db', 0)
 
   date    = luigi.DateParameter(default=datetime.today() - timedelta(days=5))
-  rule_id = luigi.Parameter()
+  rule    = luigi.Parameter()
   segment = luigi.Parameter()
 
   query =  "SELECT MAX(p.engagement_score) as max_engagement, \
@@ -71,7 +71,7 @@ class AggregateToRedis(luigi.Task):
             WHERE \
               p.created_at > DATE('%(date)s') \
             AND \
-              p.rule_id = %(rule_id)d \
+              p.rule_id = %(rule)d \
               %(segment_clause)s \
             GROUP BY \
               rule_id "
@@ -80,7 +80,7 @@ class AggregateToRedis(luigi.Task):
     return LocalTarget(self.input_file())
 
   def output(self):
-    update_id = "{0}-{1}".format(self.date.strftime("%Y%m%d%H"), self.rule_id)
+    update_id = "{0}-{1}".format(self.date.strftime("%Y%m%d%H"), self.rule)
     return MySqlTarget(host=self.db_host, 
                        database=self.db_database, 
                        user=self.db_user, 
@@ -96,7 +96,7 @@ class AggregateToRedis(luigi.Task):
     segment_clause = "" if self.segment == None else "AND (ac.segment = '{0}' OR ac.segment IS NULL)".format(self.segment)
 
     query = self.query % {'date':    self.date, 
-                                'rule_id': self.rule_id, 
+                                'rule': self.rule, 
                                 'segment_clause': segment_clause}
 
     cursor.execute(query)
