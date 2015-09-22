@@ -104,6 +104,9 @@ class AggregateToRedis(luigi.Task):
     redis_client = self.redis_client()
     for (_max, avg, std, count, rule) in cursor:
       print '_max:', _max, 'avg', avg, 'std', std, 'count', count, 'rule', rule
+      if count < 30:
+        print 'SKIPPING RULE ', rule
+        continue
       redis_client.hset("encore:predictive-post-%s" % rule, 'max', _max)
       redis_client.hset("encore:predictive-post-%s" % rule, 'avg', avg)
       redis_client.hset("encore:predictive-post-%s" % rule, 'std', std)
