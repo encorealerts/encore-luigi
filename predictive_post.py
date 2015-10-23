@@ -89,23 +89,24 @@ class AggregateToRedis(luigi.Task):
                        update_id=update_id)
 
   def run(self):
-    print ('@@@ RUNNING AggregateToRedis')
+    print 'AggregateToRedis - rule:', self.rule, 'date:', self.date, 'segment:', self.segment
+    
     connection = self.connect()
     cursor = connection.cursor(buffered=True)
 
     segment_clause = "" if self.segment == None else "AND (ac.segment = '{0}' OR ac.segment IS NULL)".format(self.segment)
 
-    query = self.query % {'date':    self.date, 
-                                'rule': self.rule, 
-                                'segment_clause': segment_clause}
+    query = self.query % {  'date': self.date, 
+                            'rule': self.rule, 
+                            'segment_clause': segment_clause}
 
     cursor.execute(query)
 
     redis_client = self.redis_client()
     for (_max, avg, std, count, rule) in cursor:
-      print '_max:', _max, 'avg', avg, 'std', std, 'count', count, 'rule', rule
+      print 'AggregateToRedis - _max:', _max, 'avg:', avg, 'std:', std, 'count:', count, 'rule:', rule
       if count < 30:
-        print 'SKIPPING RULE ', rule
+        print 'AggregateToRedis - skipping - rule:', rule
         continue
       redis_client.hset("encore:predictive-post-%s" % rule, 'max', _max)
       redis_client.hset("encore:predictive-post-%s" % rule, 'avg', avg)
