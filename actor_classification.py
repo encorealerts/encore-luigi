@@ -190,8 +190,8 @@ class TrainRandomForestModel(luigi.Task):
   s3_csvs      = luigi.Parameter('s3://encorealert-luigi-development/actor_classification/csv/')
   s3_models    = luigi.Parameter('s3://encorealert-luigi-development/actor_classification/models/')
   
-  local_csvs   = 'data/actor_classification/csv/'
-  local_path  = 'data/actor_classification/models/'
+  local_csvs   = '/mnt/encore-luigi/data/actor_classification/csv/'
+  local_path  = '/mnt/encore-luigi/data/actor_classification/models/'
 
   tweets_features_cols = ['actor_summary',
                           'actor_favorites_count', 
