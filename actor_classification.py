@@ -6,10 +6,7 @@ import time
 import re
 import csv
 
-from dateutil import relativedelta
-from dateutil import parser
 from datetime import datetime
-from dateutil.tz import tzlocal
 
 import luigi
 from luigi import LocalTarget
@@ -157,9 +154,7 @@ class PreprocessData(luigi.Task):
       summary_matrix = summary_countvect.fit_transform(train.summary)
       features_names = map(lambda f: "_".join(["summary",f]), summary_countvect.get_feature_names())
       summary_df = pd.DataFrame(summary_matrix.A, columns=features_names)
-      print(summary_matrix.shape)
       train = pd.concat([train, summary_df], axis=1, join='inner').drop(["summary"], axis=1)
-      print(train.shape)
 
     # Treat remaining null values
     train = train.fillna(0)
@@ -241,7 +236,7 @@ class TrainRandomForestModel(luigi.Task):
     return directory + self.date.strftime('actor_classification_random_forest_%Y%m%d.pkl')
 
   def model_features_path(self, directory):
-    return directory + self.date.strftime('model_features_%Y%m%d.pkl')
+    return directory + self.date.strftime('actor_classification_random_forest_features_%Y%m%d.pkl')
 
 class DeployModel(luigi.Task):
   date = luigi.Parameter(default=datetime.today())
