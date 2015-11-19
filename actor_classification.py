@@ -1,6 +1,16 @@
 import os
 import shutil
 
+import glob
+import time
+import re
+import csv
+
+from dateutil import relativedelta
+from dateutil import parser
+from datetime import datetime
+from dateutil.tz import tzlocal
+
 import luigi
 from luigi import LocalTarget
 from luigi.s3 import S3Target, S3Client
@@ -10,40 +20,31 @@ from luigi.contrib.ssh import RemoteTarget
 
 from transfer import RemoteToS3Task, S3ToLocalTask, LocalToS3Task, LocalToRemoteTask
 
-import pandas as pd
 import numpy as np
-
-import glob
-import time
-import re
-import csv
-
-from twitter import *
+import pandas as pd
+import matplotlib.pyplot as plt
 
 import nltk
 from nltk import word_tokenize
 
 from sklearn.cross_validation import KFold
+from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import confusion_matrix
 from sklearn.externals import joblib
 
 from sklearn.feature_extraction.text import CountVectorizer
 
-from dateutil import relativedelta
-from dateutil import parser
-from datetime import datetime
-from dateutil.tz import tzlocal
 
-class DownloadTrainerData(S3ToLocalTask):
+class DownloadTrainingData(S3ToLocalTask):
   date = luigi.DateParameter()
   
   req_remote_host = luigi.Parameter(default='ubuntu@ec2-23-21-255-214.compute-1.amazonaws.com')
-  req_remote_path = luigi.Parameter(default='labs/trainers/twitter-actor.csv')
+  req_remote_path = luigi.Parameter(default='labs/trainers/actor_classification_train.csv')
   req_key_file    = luigi.Parameter(default='/Users/felipeclopes/.ec2/encore')
 
-  s3_path     = luigi.Parameter(default='s3://encorealert-luigi-development/actor_classification/raw/twitter-actor.csv')
-  local_path  = luigi.Parameter(default='data/actor_classification/raw/twitter-actor.csv')  
+  s3_path     = luigi.Parameter(default='s3://encorealert-luigi-development/actor_classification/raw/actor_classification_train.csv')
+  local_path  = luigi.Parameter(default='data/actor_classification/raw/actor_classification_train.csv')  
 
   def requires(self):
     return RemoteToS3Task(host=self.req_remote_host, 
@@ -57,11 +58,12 @@ class DownloadTrainerData(S3ToLocalTask):
   def output_target(self):
     return LocalTarget(self.date.strftime(self.local_path + '.' + '%Y%m%d'))
 
-class EnrichTrainerData(luigi.Task):
+
+class PreprocessData(luigi.Task):
   date = luigi.DateParameter()
   
-  input_prefix = 'data/actor_classification/raw/twitter-actor.csv'
-  output_prefix = 'data/actor_classification/csv/enriched-twitter-actor.csv'
+  input_prefix = 'data/actor_classification/raw/actor_classification_train.csv'
+  output_prefix = 'data/actor_classification/csv/enriched-actor_classification_train.csv'
 
   token = luigi.Parameter(default='22911906-GR7LBJ2oil3cc27aUIAln4zur4F7CdKAKyEi6NDzi')
   token_key = luigi.Parameter(default='FZbyPm1i3BMfiXKlKPuzBdRlvbenW09n8LX5OvgM85g')
@@ -72,7 +74,7 @@ class EnrichTrainerData(luigi.Task):
     return LocalTarget(self.input_file())
 
   def output(self):
-    return [LocalTarget(self.output_file() + '.brand'), LocalTarget(self.output_file() + '.person')]
+    return LocalTarget(self.output_file())
 
   def input_file(self):
     return self.date.strftime(self.input_prefix + '.' + '%Y%m%d')
@@ -81,107 +83,97 @@ class EnrichTrainerData(luigi.Task):
     return self.date.strftime(self.output_prefix + '.' + '%Y%m%d')
 
   def requires(self):
-    return DownloadTrainerData(self.date)
+    return DownloadTrainingData(self.date)
 
   def run(self):
     input_file = self.date.strftime(self.input_prefix + '.' + '%Y%m%d')
     output_file = self.date.strftime(self.output_prefix + '.' + '%Y%m%d')
 
+    # Read input dataset
     print self.input_file()
-    df = self.load_dataframe(self.input_file())
+    train = pd.read_csv(open(self.input_file(),'rU'), engine='python', sep=",", quoting=1)
 
-    self.output()[0].makedirs()
-    business_data = self.lookup_twitter_statuses(df[df['class'] == 'business'])
-    self.persist_complete_data(self.output_file() + '.brand', business_data)
-    self.output()[1].makedirs()
-    personal_data = self.lookup_twitter_statuses(df[df['class'] == 'personal'])
-    self.persist_complete_data(self.output_file() + '.person', personal_data)
+    # Perform feature engineering
+    train = self.perform_feature_engineering(train)
 
-  def load_dataframe(self, full_name):
-    df = pd.read_csv(full_name, header=None, names=['native_id', 'class'])
-    df = df[df['class'].isin(['business', 'personal'])]
-    df = df.drop_duplicates('native_id')
-    df['native_id'] = df['native_id'].astype('str')
-    print '# Parsed', full_name, 'with', len(df), 'lines.'
-    return df
+    # Save output file
+    self.save_output_file(train)
 
-  def persist_complete_data(self, file_name, data):
-    s = 0
-    with open(file_name, 'w') as csv_file:
-      tweets_writer = csv.writer(csv_file)
-      tweets_writer.writerow([
-        'actor_id',
-        'actor_screen_name',
-        'actor_name',
-        'actor_verified',
-        'actor_friends_count',
-        'actor_followers_count',
-        'actor_listed_count',
-        'actor_statuses_count',
-        'actor_favorites_count',
-        'actor_summary',
-        'actor_created_at',
-        'actor_location',
+  def perform_feature_engineering(self, train):
+    # Remove non-relevant columns
+    train = train.drop(["segment"], axis=1)
+    train = train.drop(["link"], axis=1)
 
-        'tweet_id',
-        'tweet_created_at',
-        'tweet_generator',
-        'tweet_body',
-        'tweet_verb',
+    # Transform boolean 'verified' to 0/1
+    train.ix[train.verified.isnull(), 'verified'] = False
+    train.ix[train.verified == True,  'verified'] = 1
+    train.ix[train.verified == False, 'verified'] = 0
 
-        'tweet_urls_count',
-        'tweet_mentions_count',
-        'tweet_hashtags_count',
-        'tweet_trends_count',
-        'tweet_symbols_count'])
-      for tweet in data:
-        try:
-          tweets_writer.writerow([
-            tweet['user']['id'],
-            tweet['user']['screen_name'],
-            tweet['user']['name'],
-            tweet['user']['verified'],
-            tweet['user']['friends_count'],
-            tweet['user']['followers_count'],
-            tweet['user']['listed_count'],
-            tweet['user']['statuses_count'],
-            tweet['user']['favourites_count'],
-            tweet['user']['description'],
-            tweet['user']['created_at'],
-            tweet['user']['location'] if tweet['user'].get('location') else 'null',
+    # OneHotEncoding for 'lang'
+    if "lang" in train:
+      train.ix[(train.lang == 'Select Language...') | (train.lang.isnull()), 'lang'] = None
+      for lang in list(set(train.lang)):
+        if lang != None:
+          train.ix[train.lang == lang, "lang_"+lang] = 1
+          train.ix[train.lang != lang, "lang_"+lang] = 0
+      train = train.drop(["lang"], axis=1)
 
-            tweet['id'],
-            tweet['created_at'],
-            re.findall('>(.*)<', tweet['source'])[0],
-            tweet['text'],
-            not tweet['retweeted'],
-            len(tweet['entities']['urls']),
-            len(tweet['entities']['user_mentions']),
-            len(tweet['entities']['hashtags']),
-            "",
-            len(tweet['entities']['symbols'])
-          ])
-          s += 1
-          if (s % 100 == 0): print('Written', s, 'rows to', file_name)
-        except Exception, ex:
-          print ex
+    # Treat special characters
+    text_fields = ["name", "screen_name","summary"]
 
+    def treat_special_char(c):
+      try:
+        return '0' if c.isdigit() else c.decode().encode("utf-8")
+      except UnicodeDecodeError:
+        return '9'
 
-  def lookup_twitter_statuses(self, data):
-    if len(data) == 0: return []
+    for field in text_fields:
+      train.ix[train[field].isnull(), field] = "null"
+      train[field] = map(lambda n: ''.join(map(lambda c: treat_special_char(c), list(n))), train[field].values)
 
-    t = Twitter(auth=OAuth(self.token, self.token_key, self.con_secret, self.con_secret_key))
-    # Get trained_data buckets too lookup
-    indices = np.arange(len(data))
-    max_mod = int((len(data)/100)+1)
-    tweets = []
-    for x in range(0, max_mod):
-      native_ids = data[(indices % max_mod) == x]['native_id']
-      tweets += t.statuses.lookup(_id=','.join(native_ids), _timeout=3)
-      print 'Downloaded tweet info for', len(tweets)
-      time.sleep(5)
+    # CountVectorizer for 'screen_name' and 'name'
+    def num_char_tokenizer(text):
+      return list(text)
 
-    return tweets
+    for field in ["screen_name","name"]:
+      if field in train:
+        field_countvect = CountVectorizer(tokenizer=num_char_tokenizer,
+                                          ngram_range=(3, 5), 
+                                          analyzer="char",
+                                          min_df = 8)
+
+        field_matrix = field_countvect.fit_transform(train[field])
+        features_names = map(lambda f: "_".join([field,f]), field_countvect.get_feature_names())
+        field_df = pd.DataFrame(field_matrix.A, columns=features_names)
+
+        train = pd.concat([train, field_df], axis=1, join='inner').drop([field], axis=1)
+
+    # CountVectorizer for 'summary'
+    def num_word_tokenizer(text):
+      tokenizer = nltk.RegexpTokenizer(r'\w+')
+      return tokenizer.tokenize(text)
+
+    if "summary" in train:
+      summary_countvect = CountVectorizer(tokenizer=num_word_tokenizer,
+                                          ngram_range=(2, 4), 
+                                          analyzer="word",
+                                          min_df = 5)
+
+      summary_matrix = summary_countvect.fit_transform(train.summary)
+      features_names = map(lambda f: "_".join(["summary",f]), summary_countvect.get_feature_names())
+      summary_df = pd.DataFrame(summary_matrix.A, columns=features_names)
+      print(summary_matrix.shape)
+      train = pd.concat([train, summary_df], axis=1, join='inner').drop(["summary"], axis=1)
+      print(train.shape)
+
+    # Treat remaining null values
+    train = train.fillna(0)
+
+    return train            
+
+  def save_output_file(self, df):
+    self.output().makedirs()
+    df.to_csv(self.output_file)
 
 class TrainRandomForestModel(luigi.Task):
   date         = luigi.Parameter(default=datetime.today())
@@ -193,181 +185,57 @@ class TrainRandomForestModel(luigi.Task):
   local_csvs   = '/mnt/encore-luigi/data/actor_classification/csv/'
   local_path  = '/mnt/encore-luigi/data/actor_classification/models/'
 
-  tweets_features_cols = ['actor_summary',
-                          'actor_favorites_count', 
-                          'actor_followers_count', 
-                          'actor_friends_count', 
-                          'actor_listed_count', 
-                          'actor_statuses_count', 
-                          'actor_verified',
-                          'class',
-                          'manually_tweeting',
-                          'followers_friends_ratio',
-                          'favourites_friends_ratio',
-                          'favourites_followers_ratio',
-                          'favourites_status_ratio',
-                          'actor_registration_from_now'
-                          ]
+  input_prefix = 'data/actor_classification/csv/enriched-actor_classification_train.csv'
 
-  tweets_original_cols = ['actor_summary',
-                          'actor_favorites_count', 
-                          'actor_followers_count', 
-                          'actor_friends_count', 
-                          'actor_listed_count', 
-                          'actor_statuses_count', 
-                          'actor_verified',
-                          'tweet_hashtags_count',
-                          'tweet_mentions_count',
-                          'tweet_urls_count',
-                          'class'
-                          ]
-
-  manual_generators = ['Twitter Web Client', 
-                     'Twitter for iPhone', 
-                     'Twitter for Android', 
-                     'Twitter for BlackBerry', 
-                     'Twitter for Windows Phone', 
-                     'Twitter for iPad', 
-                     'Twitter for BlackBerry\xc2\xae', 
-                     'Twitter for Mac', 
-                     'Twitter for Android Tablets', 
-                     'Twitter for Windows', 
-                     'Twitter for Apple Watch', 
-                     'Twitter for  Android']
+  def input_file(self):
+    return self.date.strftime(self.input_prefix + '.' + '%Y%m%d')
 
   def requires(self):
     yield [S3ToLocalTask(s3_path=self.s3_csvs + s3_file, local_path=self.local_csvs + s3_file) for s3_file in S3Client().list(path=self.s3_csvs)]
-    yield RangeDailyBase(start=self.start, of='EnrichTrainerData')
+    yield RangeDailyBase(start=self.start, of='PreprocessData')
 
   def output(self):
-    return {
-      'model': S3Target(self.model_path(self.s3_models)),
-      'counter': S3Target(self.counter_path(self.s3_models))
-      }
+    return S3Target(self.model_path(self.s3_models))
 
   def run(self):
-    brands = self.concat_dataframes(self.local_csvs + '*.brand')
-    brands['class'] = 0
-    person = self.concat_dataframes(self.local_csvs + '*.person')
-    person['class'] = 1
+    train = pd.read_csv(self.input_file())
 
-    tweets = pd.concat([brands, person])
-    del tweets['score']
-    del tweets['tweet_symbols_count']
-    del tweets['tweet_trends_count']
+    outcome = "manual_segment"
 
-    tweets = self.generate_calculated_features(tweets)
-    tweets, counter = self.create_ngrams_with_bio(tweets)
+    features = list(set(train.columns) - set([outcome]))
 
-    cols = tweets.columns
-    cols = cols - ['class']
-    print '### Train Columns:', cols
+    k_fold = KFold(n=len(train), n_folds=10, indices=False, shuffle=True)
+    b_scores, svc_scores = [], []
 
-    for fold in [6,2]:
-      k_fold = KFold(n=len(tweets), n_folds=fold, indices=False, shuffle=True)
-      b_scores, svc_scores = [], []
+    for tr_indices, cv_indices in k_fold:
+        tr   = np.asarray(train[tr_indices][features])
+        tr_y = np.asarray(train[tr_indices][outcome])
 
-      for train_indices, test_indices in k_fold:
-        train = np.asarray(tweets[train_indices][cols])
-        train_y    = np.asarray(tweets[train_indices]['class'])
+        cv   = np.asarray(train[cv_indices][features])
+        cv_y = np.asarray(train[cv_indices][outcome])
 
-        test = np.asarray(tweets[test_indices][cols])
-        test_y     = np.asarray(tweets[test_indices]['class'])
+        rfmodel = RandomForestClassifier(n_estimators=25)
+        rfmodel.fit(tr, tr_y)
 
-        clf = RandomForestClassifier(n_estimators=25)
-        clf.fit(train, train_y)
-        clf_probs = clf.predict_proba(test)
-        print confusion_matrix(test_y, clf.predict(test))
-        print 'score:' + str(clf.score(test, test_y))
+        print(confusion_matrix(cv_y, rfmodel.predict(cv)))    
+        print('score:' + str(rfmodel.score(cv, cv_y)))
         
-    forest = RandomForestClassifier(n_estimators=25)
-    forest.fit(tweets[cols], tweets['class'])
+    rfmodel = RandomForestClassifier(n_estimators=25)
+    rfmodel.fit(train[features], train[outcome])
 
     if not os.path.exists(self.local_path):
       os.makedirs(self.local_path)
 
-    joblib.dump(forest, self.model_path(self.local_path), compress=9)
-    joblib.dump(counter, self.counter_path(self.local_path), compress=9)
+    joblib.dump(rfmodel, self.model_path(self.local_path), compress=9)
 
     with open(self.model_path(self.local_path)) as model_pickle:
-      with open(self.counter_path(self.local_path)) as counter_pickle:
-        with self.output()['model'].open(mode='w') as s3_model:
-          with self.output()['counter'].open(mode='w') as s3_counter:
-            s3_model.write(model_pickle.read())
-            s3_counter.write(counter_pickle.read())
-
+      with self.output().open(mode='w') as s3_model:
+        s3_model.write(model_pickle.read())
 
     os.remove(self.model_path(self.local_path))
-    os.remove(self.counter_path(self.local_path))
 
   def model_path(self, directory):
     return directory + self.date.strftime('actor_classification_random_forest_%Y%m%d.pkl')
-  def counter_path(self, directory):
-    return directory + self.date.strftime('bio_count_vectorizer_%Y%m%d.pkl')
-    
-  def actor_registration_from_now(self, registration):
-    r = parser.parse(registration)
-    d = relativedelta.relativedelta(datetime.now(tzlocal()), r)
-    return d.years * 12 + d.months
-
-  def generate_calculated_features(self, tweets):
-    tweets = tweets.dropna(subset=self.tweets_original_cols)
-
-    int_cols = ['actor_followers_count', 'actor_friends_count', 'actor_favorites_count', 'actor_statuses_count', 'actor_listed_count', 'class']
-    tweets[int_cols] = tweets[int_cols].astype(int)
-
-    tweets.loc[:, ('manually_tweeting')] = tweets.loc[:, 'tweet_generator'].apply(lambda entry: 1 if entry in self.manual_generators else 0)
-    tweets.loc[:, ('actor_verified')] = tweets.loc[:, 'actor_verified'].apply(lambda entry: 1 if entry else 0)
-    tweets.loc[:, ('followers_friends_ratio')] = tweets.loc[:, 'actor_followers_count']/tweets.loc[:, 'actor_friends_count']
-    tweets.loc[:, ('favourites_friends_ratio')] = tweets.loc[:, 'actor_favorites_count']/tweets.loc[:, 'actor_friends_count']
-    tweets.loc[:, ('favourites_followers_ratio')] = tweets.loc[:, 'actor_favorites_count']/tweets.loc[:, 'actor_followers_count']
-    tweets.loc[:, ('favourites_status_ratio')] = tweets.loc[:, 'actor_favorites_count']/tweets.loc[:, 'actor_statuses_count']
-
-    tweets.loc[:, ('actor_registration_from_now')] = tweets.loc[:, 'actor_created_at'].apply(lambda registration: self.actor_registration_from_now(registration))
-
-    tweets = tweets.loc[:, (self.tweets_features_cols)]
-    tweets = tweets.replace([np.inf, -np.inf], 0).dropna()
-
-    return tweets
-
-  import nltk
-  from nltk import word_tokenize
-  from sklearn.feature_extraction.text import CountVectorizer
-
-  # #######
-  def tokenize(self, text):
-    tokenizer = nltk.RegexpTokenizer(r'\w+')
-    tokens = tokenizer.tokenize(text)
-    tokens = [('NUM' if word.isdigit() else word) for word in tokens]
-    return tokens
-  # ######## 
-
-  def create_ngrams_with_bio(self, tweets):
-    bio_words_countvect = CountVectorizer(tokenizer=self.tokenize,
-                                                ngram_range=(1, 3), 
-                                                analyzer="word",
-                                                min_df = 30)
-
-    bio_word_matrix = bio_words_countvect.fit_transform(tweets['actor_summary'])
-    bio_word_matrix_df = pd.DataFrame(bio_word_matrix.A, columns=map(lambda name: 'bio_words_' + name, bio_words_countvect.get_feature_names()))
-    
-    del tweets['actor_summary']
-
-    # vocabulary = joblib.load('<my vectorizer file>') 
-    # vect = CountVectorizer(tokenizer=self.tokenize, ngram_range=(1,3), vocabulary = vocabulary)
-    return tweets.join(bio_word_matrix_df), bio_words_countvect.get_feature_names()
-
-
-  def concat_dataframes(self, wildcard):
-    files = glob.glob(wildcard)
-    dfs = []
-    for file in files:
-      print '- Parsing csv:', file
-      df = pd.read_csv(file, engine='python', encoding='utf-8')
-      dfs.append(df)
-      print '# Loaded', file, 'with', len(df), 'lines.'
-    full = pd.concat(dfs)
-    return full
 
 class DeployModel(luigi.Task):
   date = luigi.Parameter(default=datetime.today())
