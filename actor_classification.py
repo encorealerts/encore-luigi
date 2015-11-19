@@ -62,13 +62,8 @@ class DownloadTrainingData(S3ToLocalTask):
 class PreprocessData(luigi.Task):
   date = luigi.DateParameter()
   
-  input_prefix = 'data/actor_classification/raw/actor_classification_train.csv'
+  input_prefix  = 'data/actor_classification/raw/actor_classification_train.csv'
   output_prefix = 'data/actor_classification/csv/enriched-actor_classification_train.csv'
-
-  token = luigi.Parameter(default='22911906-GR7LBJ2oil3cc27aUIAln4zur4F7CdKAKyEi6NDzi')
-  token_key = luigi.Parameter(default='FZbyPm1i3BMfiXKlKPuzBdRlvbenW09n8LX5OvgM85g')
-  con_secret = luigi.Parameter(default='cyZ6NLdySvTkhKGUGmXMKw')
-  con_secret_key = luigi.Parameter(default='5UgOJOanohNPMVkfLY85CjzdMcNAAVBlRCyGYys')
 
   def input(self):
     return LocalTarget(self.input_file())
@@ -195,7 +190,10 @@ class TrainRandomForestModel(luigi.Task):
     yield RangeDailyBase(start=self.start, of='PreprocessData')
 
   def output(self):
-    return S3Target(self.model_path(self.s3_models))
+    return {
+      'model': S3Target(self.model_path(self.s3_models)),
+      'model_features': S3Target(self.model_features_path(self.s3_models))
+      }
 
   def run(self):
     train = pd.read_csv(self.input_file())
@@ -227,15 +225,23 @@ class TrainRandomForestModel(luigi.Task):
       os.makedirs(self.local_path)
 
     joblib.dump(rfmodel, self.model_path(self.local_path), compress=9)
+    joblib.dump(train.columns, self.model_features_path(self.local_path), compress=9)
 
     with open(self.model_path(self.local_path)) as model_pickle:
-      with self.output().open(mode='w') as s3_model:
-        s3_model.write(model_pickle.read())
+      with open(self.model_features_path(self.local_path)) as model_features_pickle:
+        with self.output()['model'].open(mode='w') as s3_model:
+          with self.output()['model_features'].open(mode='w') as s3_model_features:
+            s3_model.write(model_pickle.read())
+            s3_model_features.write(model_features_pickle.read())
 
     os.remove(self.model_path(self.local_path))
+    os.remove(self.model_features_path(self.local_path))
 
   def model_path(self, directory):
     return directory + self.date.strftime('actor_classification_random_forest_%Y%m%d.pkl')
+
+  def model_features_path(self, directory):
+    return directory + self.date.strftime('model_features_%Y%m%d.pkl')
 
 class DeployModel(luigi.Task):
   date = luigi.Parameter(default=datetime.today())
