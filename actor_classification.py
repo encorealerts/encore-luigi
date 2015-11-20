@@ -45,15 +45,15 @@ class DownloadTrainingData(S3ToLocalTask):
 
   def requires(self):
     return RemoteToS3Task(host=self.req_remote_host, 
-      remote_path=self.req_remote_path, 
-      s3_path=self.s3_path, 
+      remote_path=self.date.strftime(self.req_remote_path + '.' + '%Y%m%d'), 
+      s3_path=self.date.strftime(self.s3_path + '.' + '%Y%m%d'), 
       key_file=self.req_key_file)
 
   def input_target(self):
-    return S3Target(self.s3_path), client=self._get_s3_client())
+    return S3Target(self.date.strftime(self.s3_path + '.' + '%Y%m%d'), client=self._get_s3_client())
 
   def output_target(self):
-    return LocalTarget(self.local_path)
+    return LocalTarget(self.date.strftime(self.local_path + '.' + '%Y%m%d'))
 
 
 class PreprocessData(luigi.Task):
@@ -167,13 +167,13 @@ class PreprocessData(luigi.Task):
 
 class TrainRandomForestModel(luigi.Task):
   date         = luigi.Parameter(default=datetime.today())
-  start        = luigi.Parameter(default=datetime(2015,07,01))
+  start        = luigi.Parameter(default=datetime(2015,11,20))
   
   s3_csvs      = luigi.Parameter('s3://encorealert-luigi-development/actor_classification/csv/')
   s3_models    = luigi.Parameter('s3://encorealert-luigi-development/actor_classification/models/')
   
   local_csvs   = '/mnt/encore-luigi/data/actor_classification/csv/'
-  local_path  = '/mnt/encore-luigi/data/actor_classification/models/'
+  local_path   = '/mnt/encore-luigi/data/actor_classification/models/'
 
   input_prefix = 'data/actor_classification/csv/enriched-actor_classification_train.csv'
 
