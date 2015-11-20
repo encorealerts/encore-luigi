@@ -78,17 +78,15 @@ class PreprocessData(luigi.Task):
     return DownloadTrainingData(self.date)
 
   def run(self):
-    input_file = self.date.strftime(self.input_prefix + '.' + '%Y%m%d')
-    output_file = self.date.strftime(self.output_prefix + '.' + '%Y%m%d')
-
     # Read input dataset
-    print self.input_file()
+    print "Loading raw data: " + self.input_file()
     train = pd.read_csv(open(self.input_file(),'rU'), engine='python', sep=",", quoting=1)
 
     # Perform feature engineering
     train = self.perform_feature_engineering(train)
 
     # Save output file
+    print "Persisting preprocessed data: " + self.output_file()
     self.save_output_file(train)
 
   def perform_feature_engineering(self, train):
@@ -163,7 +161,7 @@ class PreprocessData(luigi.Task):
 
   def save_output_file(self, df):
     self.output().makedirs()
-    df.to_csv(self.output_file)
+    df.to_csv(self.output_file())
 
 class TrainRandomForestModel(luigi.Task):
   date         = luigi.Parameter(default=datetime.today())
@@ -192,6 +190,7 @@ class TrainRandomForestModel(luigi.Task):
 
   def run(self):
     train = pd.read_csv(self.input_file())
+    print('Loaded:' + self.input_file())
 
     outcome = "manual_segment"
 
@@ -200,6 +199,7 @@ class TrainRandomForestModel(luigi.Task):
     k_fold = KFold(n=len(train), n_folds=10, indices=False, shuffle=True)
     b_scores, svc_scores = [], []
 
+    print('Starting K-fold CV for ' + self.input_file())
     for tr_indices, cv_indices in k_fold:
         tr   = np.asarray(train[tr_indices][features])
         tr_y = np.asarray(train[tr_indices][outcome])
@@ -219,6 +219,8 @@ class TrainRandomForestModel(luigi.Task):
     if not os.path.exists(self.local_path):
       os.makedirs(self.local_path)
 
+    print('Persisting pickle files for ' + self.input_file())
+
     joblib.dump(rfmodel, self.model_path(self.local_path), compress=9)
     joblib.dump(train.columns, self.model_features_path(self.local_path), compress=9)
 
@@ -231,6 +233,8 @@ class TrainRandomForestModel(luigi.Task):
 
     os.remove(self.model_path(self.local_path))
     os.remove(self.model_features_path(self.local_path))
+
+    print('Pickle files persisted for ' + self.input_file())
 
   def model_path(self, directory):
     return directory + self.date.strftime('actor_classification_random_forest_%Y%m%d.pkl')
