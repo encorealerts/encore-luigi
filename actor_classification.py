@@ -45,15 +45,15 @@ class DownloadTrainingData(S3ToLocalTask):
 
   def requires(self):
     return RemoteToS3Task(host=self.req_remote_host, 
-      remote_path=self.date.strftime(self.req_remote_path + '.' + '%Y%m%d'), 
-      s3_path=self.date.strftime(self.s3_path + '.' + '%Y%m%d'), 
+      remote_path=self.req_remote_path, 
+      s3_path=self.s3_path, 
       key_file=self.req_key_file)
 
   def input_target(self):
-    return S3Target(self.date.strftime(self.s3_path + '.' + '%Y%m%d'), client=self._get_s3_client())
+    return S3Target(self.s3_path), client=self._get_s3_client())
 
   def output_target(self):
-    return LocalTarget(self.date.strftime(self.local_path + '.' + '%Y%m%d'))
+    return LocalTarget(self.local_path)
 
 
 class PreprocessData(luigi.Task):
