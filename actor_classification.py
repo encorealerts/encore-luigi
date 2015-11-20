@@ -1,4 +1,5 @@
 import os
+import sys
 import shutil
 
 import glob
@@ -121,38 +122,51 @@ class PreprocessData(luigi.Task):
       train.ix[train[field].isnull(), field] = "null"
       train[field] = map(lambda n: ''.join(map(lambda c: treat_special_char(c), list(n))), train[field].values)
 
-    print "==> Feature Engineering - CountVectorizer for 'screen_name' and 'name': " + self.input_file()
     def num_char_tokenizer(text):
       return list(text)
 
     for field in ["screen_name","name"]:
       if field in train:
+        print "==> Feature Engineering - CountVectorizer for '"+field+"': " + self.input_file()
         field_countvect = CountVectorizer(tokenizer=num_char_tokenizer,
                                           ngram_range=(3, 5), 
                                           analyzer="char",
                                           min_df = 8)
 
+        print "==> Feature Engineering - CountVectorizer for '"+field+"' - fit_transform: " + self.input_file()
         field_matrix = field_countvect.fit_transform(train[field])
         features_names = map(lambda f: "_".join([field,f]), field_countvect.get_feature_names())
+        print "==> Feature Engineering - CountVectorizer for '"+field+"' - data frame: " + self.input_file()
         field_df = pd.DataFrame(field_matrix.A, columns=features_names)
 
-        train = pd.concat([train, field_df], axis=1, join='inner').drop([field], axis=1)
+        print "==> Feature Engineering - CountVectorizer for '"+field+"' - concat: " + self.input_file()
+        train = pd.concat([train, field_df], axis=1, join='inner')
 
-    print "==> Feature Engineering - CountVectorizer for 'summary': " + self.input_file()
+        print "==> Feature Engineering - CountVectorizer for '"+field+"' - drop: " + self.input_file()
+        train = train.drop([field], axis=1)
+        print "==> Feature Engineering - CountVectorizer for '"+field+"' - dropped: " + self.input_file()
+
     def num_word_tokenizer(text):
       tokenizer = nltk.RegexpTokenizer(r'\w+')
       return tokenizer.tokenize(text)
 
     if "summary" in train:
+      print "==> Feature Engineering - CountVectorizer for 'summary': " + self.input_file()
       summary_countvect = CountVectorizer(tokenizer=num_word_tokenizer,
                                           ngram_range=(2, 4), 
                                           analyzer="word",
                                           min_df = 5)
 
+      print "==> Feature Engineering - CountVectorizer for 'summary' - fit_transform: " + self.input_file()
       summary_matrix = summary_countvect.fit_transform(train.summary)
       features_names = map(lambda f: "_".join(["summary",f]), summary_countvect.get_feature_names())
+      print "==> Feature Engineering - CountVectorizer for 'summary' - data_frame: " + self.input_file()
       summary_df = pd.DataFrame(summary_matrix.A, columns=features_names)
-      train = pd.concat([train, summary_df], axis=1, join='inner').drop(["summary"], axis=1)
+      print "==> Feature Engineering - CountVectorizer for 'summary' - concat: " + self.input_file()
+      train = pd.concat([train, summary_df], axis=1, join='inner')
+      print "==> Feature Engineering - CountVectorizer for 'summary' - drop: " + self.input_file()
+      train = train.drop(["summary"], axis=1)
+      print "==> Feature Engineering - CountVectorizer for 'summary' - dropped: " + self.input_file()
 
     print "==> Feature Engineering - Treat remaining null values: " + self.input_file()
     train = train.fillna(0)
