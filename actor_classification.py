@@ -41,7 +41,7 @@ class DownloadTrainingData(S3ToLocalTask):
   req_key_file    = luigi.Parameter(default='/Users/felipeclopes/.ec2/encore')
 
   s3_path     = luigi.Parameter(default='s3://encorealert-luigi-development/actor_classification/raw/actor_classification_train.csv')
-  local_path  = luigi.Parameter(default='data/actor_classification/raw/actor_classification_train.csv')  
+  local_path  = luigi.Parameter(default='/mnt/encore-luigi/data/actor_classification/raw/actor_classification_train.csv')  
 
   def requires(self):
     return RemoteToS3Task(host=self.req_remote_host, 
@@ -59,8 +59,8 @@ class DownloadTrainingData(S3ToLocalTask):
 class PreprocessData(luigi.Task):
   date = luigi.DateParameter()
   
-  input_prefix  = 'data/actor_classification/raw/actor_classification_train.csv'
-  output_prefix = 'data/actor_classification/csv/enriched-actor_classification_train.csv'
+  input_prefix  = '/mnt/encore-luigi/data/actor_classification/raw/actor_classification_train.csv'
+  output_prefix = '/mnt/encore-luigi/data/actor_classification/csv/enriched-actor_classification_train.csv'
 
   def input(self):
     return LocalTarget(self.input_file())
@@ -79,27 +79,27 @@ class PreprocessData(luigi.Task):
 
   def run(self):
     # Read input dataset
-    print "Loading raw data: " + self.input_file()
+    print "==> Loading raw data: " + self.input_file()
     train = pd.read_csv(open(self.input_file(),'rU'), engine='python', sep=",", quoting=1)
 
     # Perform feature engineering
     train = self.perform_feature_engineering(train)
 
     # Save output file
-    print "Persisting preprocessed data: " + self.output_file()
+    print "==> Persisting preprocessed data: " + self.output_file()
     self.save_output_file(train)
 
   def perform_feature_engineering(self, train):
-    # Remove non-relevant columns
+    print "==> Feature Engineering - Remove non-relevant columns: " + self.input_file()
     train = train.drop(["segment"], axis=1)
     train = train.drop(["link"], axis=1)
 
-    # Transform boolean 'verified' to 0/1
+    print "==> Feature Engineering - Transform boolean 'verified' to 0/1: " + self.input_file()
     train.ix[train.verified.isnull(), 'verified'] = False
     train.ix[train.verified == True,  'verified'] = 1
     train.ix[train.verified == False, 'verified'] = 0
 
-    # OneHotEncoding for 'lang'
+    print "==> Feature Engineering - OneHotEncoding for 'lang': " + self.input_file()
     if "lang" in train:
       train.ix[(train.lang == 'Select Language...') | (train.lang.isnull()), 'lang'] = None
       for lang in list(set(train.lang)):
@@ -108,7 +108,7 @@ class PreprocessData(luigi.Task):
           train.ix[train.lang != lang, "lang_"+lang] = 0
       train = train.drop(["lang"], axis=1)
 
-    # Treat special characters
+    print "==> Feature Engineering - Treat special characters: " + self.input_file()
     text_fields = ["name", "screen_name","summary"]
 
     def treat_special_char(c):
@@ -121,7 +121,7 @@ class PreprocessData(luigi.Task):
       train.ix[train[field].isnull(), field] = "null"
       train[field] = map(lambda n: ''.join(map(lambda c: treat_special_char(c), list(n))), train[field].values)
 
-    # CountVectorizer for 'screen_name' and 'name'
+    print "==> Feature Engineering - CountVectorizer for 'screen_name' and 'name': " + self.input_file()
     def num_char_tokenizer(text):
       return list(text)
 
@@ -138,7 +138,7 @@ class PreprocessData(luigi.Task):
 
         train = pd.concat([train, field_df], axis=1, join='inner').drop([field], axis=1)
 
-    # CountVectorizer for 'summary'
+    print "==> Feature Engineering - CountVectorizer for 'summary': " + self.input_file()
     def num_word_tokenizer(text):
       tokenizer = nltk.RegexpTokenizer(r'\w+')
       return tokenizer.tokenize(text)
@@ -154,7 +154,7 @@ class PreprocessData(luigi.Task):
       summary_df = pd.DataFrame(summary_matrix.A, columns=features_names)
       train = pd.concat([train, summary_df], axis=1, join='inner').drop(["summary"], axis=1)
 
-    # Treat remaining null values
+    print "==> Feature Engineering - Treat remaining null values: " + self.input_file()
     train = train.fillna(0)
 
     return train            
@@ -199,7 +199,7 @@ class TrainRandomForestModel(luigi.Task):
     k_fold = KFold(n=len(train), n_folds=10, indices=False, shuffle=True)
     b_scores, svc_scores = [], []
 
-    print('Starting K-fold CV for ' + self.input_file())
+    print('==> Starting K-fold CV for ' + self.input_file())
     for tr_indices, cv_indices in k_fold:
         tr   = np.asarray(train[tr_indices][features])
         tr_y = np.asarray(train[tr_indices][outcome])
@@ -219,7 +219,7 @@ class TrainRandomForestModel(luigi.Task):
     if not os.path.exists(self.local_path):
       os.makedirs(self.local_path)
 
-    print('Persisting pickle files for ' + self.input_file())
+    print('==> Persisting pickle files for ' + self.input_file())
 
     joblib.dump(rfmodel, self.model_path(self.local_path), compress=9)
     joblib.dump(train.columns, self.model_features_path(self.local_path), compress=9)
@@ -234,7 +234,7 @@ class TrainRandomForestModel(luigi.Task):
     os.remove(self.model_path(self.local_path))
     os.remove(self.model_features_path(self.local_path))
 
-    print('Pickle files persisted for ' + self.input_file())
+    print('==> Pickle files persisted for ' + self.input_file())
 
   def model_path(self, directory):
     return directory + self.date.strftime('actor_classification_random_forest_%Y%m%d.pkl')
