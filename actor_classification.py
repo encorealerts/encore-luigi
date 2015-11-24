@@ -1,4 +1,5 @@
 import os
+import gc
 import sys
 import shutil
 
@@ -92,8 +93,10 @@ class PreprocessData(luigi.Task):
 
   def perform_feature_engineering(self, train):
     print "==> Feature Engineering - Remove non-relevant columns: " + self.input_file()
-    train = train.drop(["segment"], axis=1)
-    train = train.drop(["link"], axis=1)
+    # train.drop(["segment"], axis=1, inplace=True)
+    del train["segment"]
+    # train.drop(["link"], axis=1, inplace=True)
+    del train["link"]
 
     print "==> Feature Engineering - Transform boolean 'verified' to 0/1: " + self.input_file()
     train.ix[train.verified.isnull(), 'verified'] = False
@@ -107,7 +110,10 @@ class PreprocessData(luigi.Task):
         if lang != None:
           train.ix[train.lang == lang, "lang_"+lang] = 1
           train.ix[train.lang != lang, "lang_"+lang] = 0
-      train = train.drop(["lang"], axis=1)
+      # train.drop(["lang"], axis=1, inplace=True)
+      del train["lang"]
+
+    gc.collect()
 
     print "==> Feature Engineering - Treat special characters: " + self.input_file()
     text_fields = ["name", "screen_name","summary"]
@@ -131,7 +137,7 @@ class PreprocessData(luigi.Task):
         field_countvect = CountVectorizer(tokenizer=num_char_tokenizer,
                                           ngram_range=(3, 5), 
                                           analyzer="char",
-                                          min_df = 8)
+                                          min_df = 50) # 8
 
         print "==> Feature Engineering - CountVectorizer for '"+field+"' - fit_transform: " + self.input_file()
         field_matrix = field_countvect.fit_transform(train[field])
@@ -141,9 +147,12 @@ class PreprocessData(luigi.Task):
 
         print "==> Feature Engineering - CountVectorizer for '"+field+"' - concat: " + self.input_file()
         train = pd.concat([train, field_df], axis=1, join='inner')
+        gc.collect()
 
         print "==> Feature Engineering - CountVectorizer for '"+field+"' - drop: " + self.input_file()
-        train = train.drop([field], axis=1)
+        # train.drop([field], axis=1, inplace=True)
+        del train[field]
+        gc.collect()
         print "==> Feature Engineering - CountVectorizer for '"+field+"' - dropped: " + self.input_file()
 
     def num_word_tokenizer(text):
@@ -155,7 +164,7 @@ class PreprocessData(luigi.Task):
       summary_countvect = CountVectorizer(tokenizer=num_word_tokenizer,
                                           ngram_range=(2, 4), 
                                           analyzer="word",
-                                          min_df = 5)
+                                          min_df = 50) #5
 
       print "==> Feature Engineering - CountVectorizer for 'summary' - fit_transform: " + self.input_file()
       summary_matrix = summary_countvect.fit_transform(train.summary)
@@ -164,8 +173,11 @@ class PreprocessData(luigi.Task):
       summary_df = pd.DataFrame(summary_matrix.A, columns=features_names)
       print "==> Feature Engineering - CountVectorizer for 'summary' - concat: " + self.input_file()
       train = pd.concat([train, summary_df], axis=1, join='inner')
+      gc.collect()
       print "==> Feature Engineering - CountVectorizer for 'summary' - drop: " + self.input_file()
-      train = train.drop(["summary"], axis=1)
+      # train.drop(["summary"], axis=1, inplace=True)
+      del train["summary"]
+      gc.collect()
       print "==> Feature Engineering - CountVectorizer for 'summary' - dropped: " + self.input_file()
 
     print "==> Feature Engineering - Treat remaining null values: " + self.input_file()
@@ -187,7 +199,7 @@ class TrainRandomForestModel(luigi.Task):
   local_csvs   = '/mnt/encore-luigi/data/actor_classification/csv/'
   local_path   = '/mnt/encore-luigi/data/actor_classification/models/'
 
-  input_prefix = 'data/actor_classification/csv/enriched-actor_classification_train.csv'
+  input_prefix = '/mnt/encore-luigi/data/actor_classification/csv/enriched-actor_classification_train.csv'
 
   def input_file(self):
     return self.date.strftime(self.input_prefix + '.' + '%Y%m%d')
