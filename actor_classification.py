@@ -176,7 +176,8 @@ class PreprocessData(luigi.Task):
       print "==> Feature Engineering - CountVectorizer for 'summary' - dropped: " + self.input_file()
 
     print "==> Feature Engineering - Treat remaining null values: " + self.input_file()
-    train = train.fillna(0)
+    train.fillna(0, inplace=True)
+    gc.collect()
 
     return train            
 
