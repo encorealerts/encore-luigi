@@ -93,9 +93,7 @@ class PreprocessData(luigi.Task):
 
   def perform_feature_engineering(self, train):
     print "==> Feature Engineering - Remove non-relevant columns: " + self.input_file()
-    # train.drop(["segment"], axis=1, inplace=True)
     del train["segment"]
-    # train.drop(["link"], axis=1, inplace=True)
     del train["link"]
 
     print "==> Feature Engineering - Transform boolean 'verified' to 0/1: " + self.input_file()
@@ -110,7 +108,6 @@ class PreprocessData(luigi.Task):
         if lang != None:
           train.ix[train.lang == lang, "lang_"+lang] = 1
           train.ix[train.lang != lang, "lang_"+lang] = 0
-      # train.drop(["lang"], axis=1, inplace=True)
       del train["lang"]
 
     gc.collect()
@@ -150,7 +147,6 @@ class PreprocessData(luigi.Task):
         gc.collect()
 
         print "==> Feature Engineering - CountVectorizer for '"+field+"' - drop: " + self.input_file()
-        # train.drop([field], axis=1, inplace=True)
         del train[field]
         gc.collect()
         print "==> Feature Engineering - CountVectorizer for '"+field+"' - dropped: " + self.input_file()
@@ -175,7 +171,6 @@ class PreprocessData(luigi.Task):
       train = pd.concat([train, summary_df], axis=1, join='inner')
       gc.collect()
       print "==> Feature Engineering - CountVectorizer for 'summary' - drop: " + self.input_file()
-      # train.drop(["summary"], axis=1, inplace=True)
       del train["summary"]
       gc.collect()
       print "==> Feature Engineering - CountVectorizer for 'summary' - dropped: " + self.input_file()
@@ -222,7 +217,7 @@ class TrainRandomForestModel(luigi.Task):
 
     features = list(set(train.columns) - set([outcome]))
 
-    k_fold = KFold(n=len(train), n_folds=10, indices=False, shuffle=True)
+    k_fold = KFold(n=len(train), n_folds=4, indices=False, shuffle=True)
     b_scores, svc_scores = [], []
 
     print('==> Starting K-fold CV for ' + self.input_file())
@@ -257,8 +252,8 @@ class TrainRandomForestModel(luigi.Task):
             s3_model.write(model_pickle.read())
             s3_model_features.write(model_features_pickle.read())
 
-    # os.remove(self.model_path(self.local_path))
-    # os.remove(self.model_features_path(self.local_path))
+    os.remove(self.model_path(self.local_path))
+    os.remove(self.model_features_path(self.local_path))
 
     print('==> Pickle files persisted for ' + self.input_file())
 
