@@ -266,7 +266,7 @@ class TrainRandomForestModel(luigi.Task):
 class DeployModel(luigi.Task):
   date = luigi.Parameter(default=datetime.today())
   
-  model_local_directory = 'data/actor_classification/deploy/'
+  model_local_directory = '/mnt/encore-luigi/data/actor_classification/deploy/'
 
   def requires(self):
     return TrainRandomForestModel(self.date)
