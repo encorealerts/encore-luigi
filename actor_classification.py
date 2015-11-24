@@ -179,7 +179,7 @@ class PreprocessData(luigi.Task):
 
 class TrainRandomForestModel(luigi.Task):
   date         = luigi.Parameter(default=datetime.today())
-  start        = luigi.Parameter(default=datetime(2015,11,20))
+  start        = luigi.Parameter(default=datetime(2015,11,24))
   
   s3_csvs      = luigi.Parameter('s3://encorealert-luigi-development/actor_classification/csv/')
   s3_models    = luigi.Parameter('s3://encorealert-luigi-development/actor_classification/models/')
@@ -245,8 +245,8 @@ class TrainRandomForestModel(luigi.Task):
             s3_model.write(model_pickle.read())
             s3_model_features.write(model_features_pickle.read())
 
-    os.remove(self.model_path(self.local_path))
-    os.remove(self.model_features_path(self.local_path))
+    # os.remove(self.model_path(self.local_path))
+    # os.remove(self.model_features_path(self.local_path))
 
     print('==> Pickle files persisted for ' + self.input_file())
 
