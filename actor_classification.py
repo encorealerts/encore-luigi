@@ -183,7 +183,7 @@ class PreprocessData(luigi.Task):
 
   def save_output_file(self, df):
     self.output().makedirs()
-    df.to_csv(self.output_file())
+    df.to_csv(self.output_file(), index=False)
 
 class TrainRandomForestModel(luigi.Task):
   date         = luigi.Parameter(default=datetime.today())
