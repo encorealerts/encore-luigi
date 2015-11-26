@@ -1,4 +1,5 @@
 import os
+import fnmatch
 import gc
 import sys
 import shutil
@@ -34,7 +35,9 @@ from sklearn.externals import joblib
 
 from sklearn.feature_extraction.text import CountVectorizer
 
-
+################################################
+#### DOWNLOAD TRAINING DATA FROM S3
+################################################
 class DownloadTrainingData(S3ToLocalTask):
   date = luigi.DateParameter()
   
@@ -58,50 +61,67 @@ class DownloadTrainingData(S3ToLocalTask):
     return LocalTarget(self.date.strftime(self.local_path + '.' + '%Y%m%d'))
 
 
+################################################
+#### PREPROCESS DATA
+################################################
 class PreprocessData(luigi.Task):
-  date = luigi.DateParameter()
+  str_today     = datetime.today().strftime('%Y%m%d')
+  start_date    = datetime(2015,11,24)
   
-  input_prefix  = '/mnt/encore-luigi/data/actor_classification/raw/actor_classification_train.csv'
+  input_dir     = '/mnt/encore-luigi/data/actor_classification/raw/'
+  input_prefix  = 'actor_classification_train.csv'
   output_prefix = '/mnt/encore-luigi/data/actor_classification/csv/enriched-actor_classification_train.csv'
-
-  def input(self):
-    return LocalTarget(self.input_file())
+  output_file   = output_prefix + '.' + str_today
 
   def output(self):
-    return LocalTarget(self.output_file())
-
-  def input_file(self):
-    return self.date.strftime(self.input_prefix + '.' + '%Y%m%d')
-
-  def output_file(self):
-    return self.date.strftime(self.output_prefix + '.' + '%Y%m%d')
+    return LocalTarget(self.output_file)
 
   def requires(self):
-    return DownloadTrainingData(self.date)
+    yield RangeDailyBase(start=self.start_date, of='DownloadTrainingData')
+
+  def load_input_dataframe(self):
+    train = None
+    for file in os.listdir(self.input_dir):
+      if fnmatch.fnmatch(file, self.input_prefix+'.*'):
+        if train is None:
+          print "==> Initializing input dataframe with " + file + ": " + self.str_today
+          train = pd.read_csv(open(self.input_dir+file,'rU'),
+                              engine='python', sep=",", quoting=1)
+        else:
+          print "==> Concatenating dataframe with " + file + ": " + self.str_today
+          train = pd.concat([train, pd.read_csv(open(self.input_dir+file,'rU'),
+                              engine='python', sep=",", quoting=1)])
+        train.drop_duplicates(inplace=True)
+        print train.shape
+    return train            
+
+  def save_output_file(self, df):
+    self.output().makedirs()
+    df.to_csv(self.output_file, index=False)
 
   def run(self):
     # Read input dataset
-    print "==> Loading raw data: " + self.input_file()
-    train = pd.read_csv(open(self.input_file(),'rU'), engine='python', sep=",", quoting=1)
+    print "==> Loading raw data: " + self.str_today
+    train = self.load_input_dataframe()
 
     # Perform feature engineering
     train = self.perform_feature_engineering(train)
 
     # Save output file
-    print "==> Persisting preprocessed data: " + self.output_file()
+    print "==> Persisting preprocessed data: " + self.output_file
     self.save_output_file(train)
 
   def perform_feature_engineering(self, train):
-    print "==> Feature Engineering - Remove non-relevant columns: " + self.input_file()
+    print "==> Feature Engineering - Remove non-relevant columns: " + self.str_today
     del train["segment"]
     del train["link"]
 
-    print "==> Feature Engineering - Transform boolean 'verified' to 0/1: " + self.input_file()
+    print "==> Feature Engineering - Transform boolean 'verified' to 0/1: " + self.str_today
     train.ix[train.verified.isnull(), 'verified'] = False
     train.ix[train.verified == True,  'verified'] = 1
     train.ix[train.verified == False, 'verified'] = 0
 
-    print "==> Feature Engineering - OneHotEncoding for 'lang': " + self.input_file()
+    print "==> Feature Engineering - OneHotEncoding for 'lang': " + self.str_today
     if "lang" in train:
       train.ix[(train.lang == 'Select Language...') | (train.lang.isnull()), 'lang'] = None
       for lang in list(set(train.lang)):
@@ -112,7 +132,7 @@ class PreprocessData(luigi.Task):
 
     gc.collect()
 
-    print "==> Feature Engineering - Treat special characters: " + self.input_file()
+    print "==> Feature Engineering - Treat special characters: " + self.str_today
     text_fields = ["name", "screen_name","summary"]
 
     def treat_special_char(c):
@@ -130,64 +150,63 @@ class PreprocessData(luigi.Task):
 
     for field in ["screen_name","name"]:
       if field in train:
-        print "==> Feature Engineering - CountVectorizer for '"+field+"': " + self.input_file()
+        print "==> Feature Engineering - CountVectorizer for '"+field+"': " + self.str_today
         field_countvect = CountVectorizer(tokenizer=num_char_tokenizer,
                                           ngram_range=(3, 5), 
                                           analyzer="char",
                                           min_df = 50) # 8
 
-        print "==> Feature Engineering - CountVectorizer for '"+field+"' - fit_transform: " + self.input_file()
+        print "==> Feature Engineering - CountVectorizer for '"+field+"' - fit_transform: " + self.str_today
         field_matrix = field_countvect.fit_transform(train[field])
         features_names = map(lambda f: "_".join([field,f]), field_countvect.get_feature_names())
-        print "==> Feature Engineering - CountVectorizer for '"+field+"' - data frame: " + self.input_file()
+        print "==> Feature Engineering - CountVectorizer for '"+field+"' - data frame: " + self.str_today
         field_df = pd.DataFrame(field_matrix.A, columns=features_names)
 
-        print "==> Feature Engineering - CountVectorizer for '"+field+"' - concat: " + self.input_file()
+        print "==> Feature Engineering - CountVectorizer for '"+field+"' - concat: " + self.str_today
         train = pd.concat([train, field_df], axis=1, join='inner')
         gc.collect()
 
-        print "==> Feature Engineering - CountVectorizer for '"+field+"' - drop: " + self.input_file()
+        print "==> Feature Engineering - CountVectorizer for '"+field+"' - drop: " + self.str_today
         del train[field]
         gc.collect()
-        print "==> Feature Engineering - CountVectorizer for '"+field+"' - dropped: " + self.input_file()
+        print "==> Feature Engineering - CountVectorizer for '"+field+"' - dropped: " + self.str_today
 
     def num_word_tokenizer(text):
       tokenizer = nltk.RegexpTokenizer(r'\w+')
       return tokenizer.tokenize(text)
 
     if "summary" in train:
-      print "==> Feature Engineering - CountVectorizer for 'summary': " + self.input_file()
+      print "==> Feature Engineering - CountVectorizer for 'summary': " + self.str_today
       summary_countvect = CountVectorizer(tokenizer=num_word_tokenizer,
                                           ngram_range=(2, 4), 
                                           analyzer="word",
                                           min_df = 50) #5
 
-      print "==> Feature Engineering - CountVectorizer for 'summary' - fit_transform: " + self.input_file()
+      print "==> Feature Engineering - CountVectorizer for 'summary' - fit_transform: " + self.str_today
       summary_matrix = summary_countvect.fit_transform(train.summary)
       features_names = map(lambda f: "_".join(["summary",f]), summary_countvect.get_feature_names())
-      print "==> Feature Engineering - CountVectorizer for 'summary' - data_frame: " + self.input_file()
+      print "==> Feature Engineering - CountVectorizer for 'summary' - data_frame: " + self.str_today
       summary_df = pd.DataFrame(summary_matrix.A, columns=features_names)
-      print "==> Feature Engineering - CountVectorizer for 'summary' - concat: " + self.input_file()
+      print "==> Feature Engineering - CountVectorizer for 'summary' - concat: " + self.str_today
       train = pd.concat([train, summary_df], axis=1, join='inner')
       gc.collect()
-      print "==> Feature Engineering - CountVectorizer for 'summary' - drop: " + self.input_file()
+      print "==> Feature Engineering - CountVectorizer for 'summary' - drop: " + self.str_today
       del train["summary"]
       gc.collect()
-      print "==> Feature Engineering - CountVectorizer for 'summary' - dropped: " + self.input_file()
+      print "==> Feature Engineering - CountVectorizer for 'summary' - dropped: " + self.str_today
 
-    print "==> Feature Engineering - Treat remaining null values: " + self.input_file()
+    print "==> Feature Engineering - Treat remaining null values: " + self.str_today
     train.fillna(0, inplace=True)
     gc.collect()
 
-    return train            
+    return train
+    
 
-  def save_output_file(self, df):
-    self.output().makedirs()
-    df.to_csv(self.output_file(), index=False)
-
+################################################
+#### TRAIN A RANDOM FOREST MODEL
+################################################
 class TrainRandomForestModel(luigi.Task):
   date         = luigi.Parameter(default=datetime.today())
-  start        = luigi.Parameter(default=datetime(2015,11,24))
   
   s3_csvs      = luigi.Parameter('s3://encorealert-luigi-development/actor_classification/csv/')
   s3_models    = luigi.Parameter('s3://encorealert-luigi-development/actor_classification/models/')
@@ -202,7 +221,7 @@ class TrainRandomForestModel(luigi.Task):
 
   def requires(self):
     yield [S3ToLocalTask(s3_path=self.s3_csvs + s3_file, local_path=self.local_csvs + s3_file) for s3_file in S3Client().list(path=self.s3_csvs)]
-    yield RangeDailyBase(start=self.start, of='PreprocessData')
+    yield PreprocessData()
 
   def output(self):
     return {
@@ -264,6 +283,9 @@ class TrainRandomForestModel(luigi.Task):
   def model_features_path(self, directory):
     return directory + self.date.strftime('actor_classification_random_forest_features_%Y%m%d.pkl')
 
+################################################
+#### DEPLOY MODEL
+################################################
 class DeployModel(luigi.Task):
   date = luigi.Parameter(default=datetime.today())
   
