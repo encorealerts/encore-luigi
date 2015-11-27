@@ -95,7 +95,7 @@ class PreprocessData(luigi.Task):
 
   def save_output_file(self, df):
     self.output().makedirs()
-    df.to_csv(self.output_file, index=False)
+    df.to_csv(self.output_file, index=False, encoding="utf-8")
 
   def run(self):
     # Read input dataset
