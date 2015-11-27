@@ -82,7 +82,7 @@ class PreprocessData(luigi.Task):
   def load_input_dataframe(self):
     train = None
     for file in os.listdir(self.input_dir):
-      if fnmatch.fnmatch(file, self.input_prefix+'.*'):
+      if fnmatch.fnmatch(file, self.input_prefix+'.*') and os.stat(self.input_dir+file).st_size > 0:
         if train is None:
           print "==> Initializing input dataframe with " + file + ": " + self.str_today
           train = pd.read_csv(open(self.input_dir+file,'rU'),
