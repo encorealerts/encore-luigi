@@ -175,6 +175,9 @@ class PreprocessData(luigi.Task):
       summary_tfidf = TfidfVectorizer(token_pattern=r'\w+',
                                       ngram_range=(1, 4), 
                                       analyzer="word",
+                                      binary=True, #False
+                                      sublinear_tf=True, 
+                                      stop_words='english',
                                       min_df = 50) #5
 
       print "==> Feature Engineering - TfidfVectorizer for 'summary' - fit_transform: " + self.str_today
@@ -243,13 +246,13 @@ class TrainRandomForestModel(luigi.Task):
         cv   = np.asarray(train[cv_indices][features])
         cv_y = np.asarray(train[cv_indices][outcome])
 
-        rfmodel = RandomForestClassifier(n_estimators=25)
+        rfmodel = RandomForestClassifier(n_estimators=100)
         rfmodel.fit(tr, tr_y)
 
         print(confusion_matrix(cv_y, rfmodel.predict(cv)))    
         print('score:' + str(rfmodel.score(cv, cv_y)))
         
-    rfmodel = RandomForestClassifier(n_estimators=25)
+    rfmodel = RandomForestClassifier(n_estimators=100)
     rfmodel.fit(train[features], train[outcome])
 
     if not os.path.exists(self.local_path):
