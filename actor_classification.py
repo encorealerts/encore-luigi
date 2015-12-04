@@ -1,17 +1,42 @@
 import os
+import re
 import fnmatch
-import gc
-import sys
-import shutil
+import json
+
+import numpy as np
+import pandas as pd
 import chardet
+import gc
+import matplotlib.pyplot as plt
+
+from pprint import pprint
+from time import time
+from datetime import datetime
+from scipy.stats import randint as sp_randint
+
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.naive_bayes import GaussianNB
+from sklearn.svm import LinearSVC
+from sklearn.neighbors import KNeighborsClassifier
+
+from sklearn.cross_validation import KFold
+from sklearn.metrics import confusion_matrix
+from sklearn.externals import joblib
+from sklearn.pipeline import Pipeline, FeatureUnion
+from sklearn.grid_search import GridSearchCV, RandomizedSearchCV
+from sklearn.base import TransformerMixin
+from sklearn.base import BaseEstimator
+from sklearn.utils.validation import check_is_fitted
+from sklearn.preprocessing import LabelEncoder, Imputer, StandardScaler
+from sklearn.lda import LDA
+from sklearn.decomposition import PCA, RandomizedPCA
+from sklearn.feature_selection import SelectKBest
+from sklearn.feature_extraction import DictVectorizer
+from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer, TfidfVectorizer
 
 import glob
-import time
-import re
 import csv
-
-from datetime import datetime
-
 import luigi
 from luigi import LocalTarget
 from luigi.s3 import S3Target, S3Client
@@ -21,17 +46,375 @@ from luigi.contrib.ssh import RemoteTarget
 
 from transfer import RemoteToS3Task, S3ToLocalTask, LocalToS3Task, LocalToRemoteTask
 
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
+################################################
+#### SCIKIT-LEARN TRANSFORMATORS
+################################################
 
-from sklearn.cross_validation import KFold
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import confusion_matrix
-from sklearn.externals import joblib
+class VerifiedTransformer(BaseEstimator, TransformerMixin):
 
-from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X, y=None):
+        X = X.copy()
+        X.verified.fillna(False, inplace=True)
+        X.verified = LabelEncoder().fit_transform(X.verified)
+        return X
+
+
+class LangOneHotEncoding(BaseEstimator, TransformerMixin):
+
+    def fit(self, X, y=None):
+        valid_langs = list(set(X.lang) - set([None, np.nan, 'Select Language...']))
+        self.feature_names_ = ["lang_"+str(l) for l in valid_langs if type(l) == str]
+        return self
+
+    def transform(self, X, y=None):
+        check_is_fitted(self, 'feature_names_')
+        
+        X = X.copy()
+        X["lang"].fillna("", inplace=True)
+        for lang_feature in self.feature_names_:
+            X[lang_feature] = [(1 if lang_feature == "lang_"+v else 0) for v in X["lang"].values]
+        
+        X.drop(["lang"], axis=1, inplace=True)
+        return X
+    
+
+class FillTextNA(BaseEstimator, TransformerMixin):
+
+    def __init__(self, cols, replace_by=""):
+        self.cols = cols
+        self.replace_by = replace_by
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X, y=None):
+        X = X.copy()
+        for c in self.cols:
+            if c in X:
+                X[c].fillna(self.replace_by, inplace=True)
+        return X
+
+
+class DataFrameTfidfVectorizer(TfidfVectorizer):
+
+    def __init__(self, col, prefix=None, input='content', encoding='utf-8',
+                 decode_error='strict', strip_accents=None, lowercase=True,
+                 preprocessor=None, tokenizer=None, analyzer='word',
+                 stop_words=None, token_pattern=r"(?u)\b\w\w+\b",
+                 ngram_range=(1, 1), max_df=1.0, min_df=1,
+                 max_features=None, vocabulary=None, binary=False,
+                 dtype=np.int64, norm='l2', use_idf=True, smooth_idf=True,
+                 sublinear_tf=False):
+        super(DataFrameTfidfVectorizer, self).__init__(
+            input=input, encoding=encoding, decode_error=decode_error,
+            strip_accents=strip_accents, lowercase=lowercase,
+            preprocessor=preprocessor, tokenizer=tokenizer, analyzer=analyzer,
+            stop_words=stop_words, token_pattern=token_pattern,
+            ngram_range=ngram_range, max_df=max_df, min_df=min_df,
+            max_features=max_features, vocabulary=vocabulary, binary=binary,
+            dtype=dtype)
+
+        self.col = col
+        self.prefix = prefix or col
+        
+    def treat_special_char(self, c):
+        try:
+            encoding = chardet.detect(str(c))['encoding'] or "KOI8-R"
+            return '0' if c.isdigit() else c.decode(encoding)
+        except:        
+            return '9'
+
+    def treat_special_chars(self, col):
+        col.fillna("null", inplace=True)
+        col = [''.join([self.treat_special_char(c) for c in list(n)]) 
+               for n in col.values]
+        return col
+
+    def fit(self, dataframe, y=None):
+        dataframe = dataframe.copy()
+        dataframe[self.col] = self.treat_special_chars(dataframe[self.col])
+        super(DataFrameTfidfVectorizer, self).fit(dataframe[self.col])
+        return self
+
+    def fit_transform(self, dataframe, y=None):
+        dataframe = dataframe.copy()
+        dataframe[self.col] = self.treat_special_chars(dataframe[self.col])
+        field_matrix = super(DataFrameTfidfVectorizer, self).fit_transform(dataframe[self.col])
+        features_names = map(lambda f: "_".join([self.prefix,f]), super(DataFrameTfidfVectorizer, self).get_feature_names())
+        field_df = pd.DataFrame(field_matrix.A, columns=features_names)
+
+        dataframe = dataframe.join(field_df)
+
+        return dataframe
+
+    def transform(self, dataframe, copy=True):
+        dataframe = dataframe.copy()
+        dataframe[self.col] = self.treat_special_chars(dataframe[self.col])
+        field_matrix = super(DataFrameTfidfVectorizer, self).transform(dataframe[self.col])
+        features_names = map(lambda f: "_".join([self.prefix,f]), super(DataFrameTfidfVectorizer, self).get_feature_names())
+        field_df = pd.DataFrame(field_matrix.A, columns=features_names)
+
+        dataframe = dataframe.join(field_df)
+
+        return dataframe
+
+
+class TextToLowerCase(BaseEstimator, TransformerMixin):
+
+    def __init__(self, cols):
+        self.cols = cols
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X, y=None):
+        X = X.copy()
+        for c in self.cols:
+            if c in X:
+                X[c] = [t.lower() for t in X[c].values]
+        return X
+
+
+class NumberOfWords(BaseEstimator, TransformerMixin):
+
+    def __init__(self, cols):
+        self.cols = cols
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X, y=None):
+        X = X.copy()
+        for c in self.cols:
+            if c in X:
+                X["number_of_words_in_"+c] = [len(t.split(' ')) for t in X[c].values]
+        return X
+
+
+class NumberNonAlphaNumChars(BaseEstimator, TransformerMixin):
+
+    def __init__(self, cols):
+        self.cols = cols
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X, y=None):
+        X = X.copy()
+        for c in self.cols:
+            if c in X:
+                X["number_of_non_alphanum_in_"+c] = [len(re.sub(r"[\w\d]","", t)) for t in X[c].values]
+        return X
+
+
+class NumberUpperCaseChars(BaseEstimator, TransformerMixin):
+
+    def __init__(self, cols):
+        self.cols = cols
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X, y=None):
+        X = X.copy()
+        for c in self.cols:
+            if c in X:
+                X["number_of_upper_case_chars_in_"+c] = [len(re.sub(r"[^A-Z]","", t)) for t in X[c].values]
+        return X
+
+
+class NumberCamelCaseWords(BaseEstimator, TransformerMixin):
+
+    def __init__(self, cols):
+        self.cols = cols
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X, y=None):
+        X = X.copy()
+        for c in self.cols:
+            if c in X:
+                X["number_of_camel_case_words_in_"+c] = [len(re.findall(r"^[A-Z][a-z]|\s[A-Z][a-z]", t)) 
+                                                         for t in X[c].values]
+        return X
+
+
+class NumberOfMentions(BaseEstimator, TransformerMixin):
+
+    def __init__(self, cols):
+        self.cols = cols
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X, y=None):
+        X = X.copy()
+        for c in self.cols:
+            if c in X:
+                X["number_of_mentions_in_"+c] = [len(re.findall(r"\s@[a-zA-Z]",t)) 
+                                                         for t in X[c].values]
+        return X
+
+
+class NumberOfPeriods(BaseEstimator, TransformerMixin):
+
+    def __init__(self, cols):
+        self.cols = cols
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X, y=None):
+        X = X.copy()
+        for c in self.cols:
+            if c in X:
+                X["number_of_periods_in_"+c] = [len(t.split(". ")) 
+                                                         for t in X[c].values]
+        return X
+
+
+class AvgWordsPerPeriod(BaseEstimator, TransformerMixin):
+
+    def __init__(self, cols):
+        self.cols = cols
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X, y=None):
+        X = X.copy()
+        for c in self.cols:
+            if c in X:
+                X["avg_words_per_period_in_"+c] = [np.mean([len(p.split(" ")) for p in t.split(". ")]) 
+                                                         for t in X[c].values]
+        return X
+
+
+class MentionToFamilyRelation(BaseEstimator, TransformerMixin):
+
+    def __init__(self, cols):
+        self.cols = cols
+
+    def fit(self, X, y=None):
+        return self
+    
+    def count_mentions(self, t):
+        count = 0
+        for o in ["husband","wife","father","mother","daddy","mommy",
+                  "grandfather","grandmother","grandpa","grandma"]:
+            count += len(re.findall(r"(^|\W)%s(\W|$)" % o, t))
+        return count
+
+    def transform(self, X, y=None):
+        X = X.copy()
+        for c in self.cols:
+            if c in X:
+                X["mention_to_family_relation_in_"+c] = [self.count_mentions(t) 
+                                                         for t in X[c].values]
+        return X
+
+
+class MentionToOccupation(BaseEstimator, TransformerMixin):
+
+    def __init__(self, cols):
+        self.cols = cols
+
+    def fit(self, X, y=None):
+        occupations = pd.read_csv("https://raw.githubusercontent.com/johnlsheridan/occupations/master/occupations.csv")
+        self.occupations_ = [o.lower() for o in occupations.Occupations.values]
+        return self
+    
+    def count_mentions(self, t):
+        count = 0
+        for o in self.occupations_:
+            count += len(re.findall(r"(^|\W)%s(\W|$)" % o, t))
+        return count
+
+    def transform(self, X, y=None):
+        check_is_fitted(self, 'occupations_')
+        X = X.copy()
+        for c in self.cols:
+            if c in X:
+                X["mention_to_occupation_in_"+c] = [self.count_mentions(t) 
+                                                     for t in X[c].values]
+        return X
+    
+
+class PersonNames(BaseEstimator, TransformerMixin):
+
+    def __init__(self, cols):
+        self.cols = cols
+
+    def fit(self, X, y=None):
+        female_names = pd.read_csv("http://deron.meranda.us/data/census-dist-female-first.txt", names=["name"])
+        male_names   = pd.read_csv("http://deron.meranda.us/data/census-dist-male-first.txt", names=["name"])
+        female_names = [re.sub(r"[^a-z]","",n.lower()) for n in female_names.name.values]
+        male_names   = [re.sub(r"[^a-z]","",n.lower()) for n in male_names.name.values]        
+        self.person_names_ = list(set(male_names + female_names))
+        return self
+    
+    def count_mentions(self, t):
+        count = 0
+        for n in self.person_names_:
+            count += len(re.findall(r"(^|\W)%s(\W|$)" % n, t))
+        return count
+
+    def transform(self, X, y=None):
+        check_is_fitted(self, 'person_names_')
+        X = X.copy()
+        for c in self.cols:
+            if c in X:
+                X["person_names_in_"+c] = [self.count_mentions(t) 
+                                            for t in X[c].values]
+        return X
+    
+
+class DropColumnsTransformer(BaseEstimator, TransformerMixin):
+
+    def __init__(self, cols):
+        self.cols = cols
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X, y=None):
+        X = X.copy()
+        for c in self.cols:
+            if c in X:
+                X.drop([c], axis=1, inplace=True)
+        return X
+
+
+class NumpyArrayTransformer(BaseEstimator, TransformerMixin):
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X, y=None):
+        X = X.copy()
+        X = X.reindex_axis(sorted(X.columns), axis=1)
+        X.fillna(0, inplace=True)
+        return np.asarray(X)
+
+
+class Debugger(BaseEstimator, TransformerMixin):
+
+    def __init__(self, name=""):
+        self.name = name
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X, y=None):
+        print "-------------------------"
+        print type(X)
+        print "-------------------------"
+        return X
+
 
 ################################################
 #### DOWNLOAD TRAINING DATA FROM S3
@@ -60,22 +443,22 @@ class DownloadTrainingData(S3ToLocalTask):
 
 
 ################################################
-#### PREPROCESS DATA
+#### TRAIN MODEL
 ################################################
-class PreprocessData(luigi.Task):
-  str_today     = datetime.today().strftime('%Y%m%d')
-  start_date    = datetime(2015,11,24)
+class TrainModel(luigi.Task):
+  date         = luigi.Parameter(default=datetime.today())
+  str_today    = datetime.today().strftime('%Y%m%d')
+  start_date   = datetime(2015,11,24)
   
-  input_dir     = '/mnt/encore-luigi/data/actor_classification/raw/'
-  input_prefix  = 'actor_classification_train.csv'
-  output_prefix = '/mnt/encore-luigi/data/actor_classification/csv/enriched-actor_classification_train.csv'
-  output_file   = output_prefix + '.' + str_today
+  input_dir    = '/mnt/encore-luigi/data/actor_classification/raw/'
+  input_prefix = 'actor_classification_train.csv'
+  
+  s3_models    = luigi.Parameter('s3://encorealert-luigi-development/actor_classification/models/')
+  
+  local_path   = '/mnt/encore-luigi/data/actor_classification/models/'
 
-  def output(self):
-    return LocalTarget(self.output_file)
-
-  def requires(self):
-    yield RangeDailyBase(start=self.start_date, of='DownloadTrainingData')
+  def model_path(self, directory):
+    return directory + self.date.strftime('actor_classification_trained_model_%Y%m%d.pkl')
 
   def load_input_dataframe(self):
     train = None
@@ -91,195 +474,138 @@ class PreprocessData(luigi.Task):
                               engine='python', sep=",", quoting=1)])
         train.drop_duplicates(inplace=True)
         print train.shape
-    return train            
+    return train
 
-  def save_output_file(self, df):
-    self.output().makedirs()
-    df.to_csv(self.output_file, index=False, encoding="utf-8")
+  def output(self):
+    return S3Target(self.model_path(self.s3_models))
+
+  def requires(self):
+    yield RangeDailyBase(start=self.start_date, of='DownloadTrainingData')
 
   def run(self):
     # Read input dataset
     print "==> Loading raw data: " + self.str_today
     train = self.load_input_dataframe()
 
-    # Perform feature engineering
-    train = self.perform_feature_engineering(train)
+    print "==> Fitting transformators: " + self.str_today
 
-    # Save output file
-    print "==> Persisting preprocessed data: " + self.output_file
-    self.save_output_file(train)
+    lang_ohe = LangOneHotEncoding().fit(train)
 
-  def perform_feature_engineering(self, train):
-    print "==> Feature Engineering - Remove non-relevant columns: " + self.str_today
-    del train["segment"]
-    del train["link"]
+    name_chars_tfidf = DataFrameTfidfVectorizer(col="name", 
+                                                prefix="name_c",
+                                                ngram_range=(3, 5), 
+                                                analyzer="char",
+                                                binary=True, #False
+                                                min_df = 50) #8
 
-    print "==> Feature Engineering - Transform boolean 'verified' to 0/1: " + self.str_today
-    train.ix[train.verified.isnull(), 'verified'] = False
-    train.ix[train.verified == True,  'verified'] = 1
-    train.ix[train.verified == False, 'verified'] = 0
+    name_words_tfidf = DataFrameTfidfVectorizer(col="name", 
+                                                prefix="name_w", 
+                                                token_pattern=r'\w+',
+                                                ngram_range=(1, 2), 
+                                                analyzer="word",
+                                                binary=True, #False
+                                                min_df = 10) #8
 
-    print "==> Feature Engineering - OneHotEncoding for 'lang': " + self.str_today
-    if "lang" in train:
-      train.ix[(train.lang == 'Select Language...') | (train.lang.isnull()), 'lang'] = None
-      for lang in list(set(train.lang)):
-        if lang != None:
-          train.ix[train.lang == lang, "lang_"+lang] = 1
-          train.ix[train.lang != lang, "lang_"+lang] = 0
-      del train["lang"]
+    screen_name_tfidf = DataFrameTfidfVectorizer(col="screen_name", 
+                                                 ngram_range=(3, 5), 
+                                                 analyzer="char",
+                                                 binary=True, #False
+                                                 min_df = 50) #8
 
-    gc.collect()
+    summary_tfidf = DataFrameTfidfVectorizer(col="summary",
+                                             token_pattern=r'\w+',
+                                             ngram_range=(1, 3), 
+                                             analyzer="word",
+                                             binary=True, #False
+                                             sublinear_tf=True, 
+                                             stop_words='english',
+                                             min_df = 50) #5
 
-    print "==> Feature Engineering - Treat special characters: " + self.str_today
-    text_fields = ["name", "screen_name","summary"]
+    mention_to_occupation = MentionToOccupation(["summary"]).fit(train)
 
-    def treat_special_char(c):
-      try:
-        encoding = chardet.detect(str(c))['encoding'] or "KOI8-R"
-        return '0' if c.isdigit() else c.decode(encoding)
-      except UnicodeDecodeError:        
-        return '9'
+    person_names = PersonNames(["name"]).fit(train)
 
-    for field in text_fields:
-      train.ix[train[field].isnull(), field] = "null"
-      train[field] = map(lambda n: ''.join(map(lambda c: treat_special_char(c), list(n))), train[field].values)
-
-    def num_char_tokenizer(text):
-      return list(text)
-
-    for field in ["screen_name","name"]:
-      if field in train:
-        print "==> Feature Engineering - TfidfVectorizer for '"+field+"': " + self.str_today
-        field_tfidf = TfidfVectorizer(tokenizer=num_char_tokenizer,
-                                      ngram_range=(3, 5), 
-                                      analyzer="char",
-                                      min_df = 50) # 8
-
-        print "==> Feature Engineering - TfidfVectorizer for '"+field+"' - fit_transform: " + self.str_today
-        field_matrix = field_tfidf.fit_transform(train[field])
-        features_names = map(lambda f: "_".join([field,f]), field_tfidf.get_feature_names())
-        print "==> Feature Engineering - TfidfVectorizer for '"+field+"' - data frame: " + self.str_today
-        field_df = pd.DataFrame(field_matrix.A, columns=features_names)
-
-        print "==> Feature Engineering - TfidfVectorizer for '"+field+"' - concat: " + self.str_today
-        train = pd.concat([train, field_df], axis=1, join='inner')
-        gc.collect()
-
-        print "==> Feature Engineering - TfidfVectorizer for '"+field+"' - drop: " + self.str_today
-        del train[field]
-        gc.collect()
-        print "==> Feature Engineering - TfidfVectorizer for '"+field+"' - dropped: " + self.str_today
-
-    if "summary" in train:
-      print "==> Feature Engineering - TfidfVectorizer for 'summary': " + self.str_today
-      summary_tfidf = TfidfVectorizer(token_pattern=r'\w+',
-                                      ngram_range=(1, 4), 
-                                      analyzer="word",
-                                      binary=True, #False
-                                      sublinear_tf=True, 
-                                      stop_words='english',
-                                      min_df = 50) #5
-
-      print "==> Feature Engineering - TfidfVectorizer for 'summary' - fit_transform: " + self.str_today
-      summary_matrix = summary_tfidf.fit_transform(train.summary)
-      features_names = map(lambda f: "_".join(["summary",f]), summary_tfidf.get_feature_names())
-      print "==> Feature Engineering - TfidfVectorizer for 'summary' - data_frame: " + self.str_today
-      summary_df = pd.DataFrame(summary_matrix.A, columns=features_names)
-      print "==> Feature Engineering - TfidfVectorizer for 'summary' - concat: " + self.str_today
-      train = pd.concat([train, summary_df], axis=1, join='inner')
-      gc.collect()
-      print "==> Feature Engineering - TfidfVectorizer for 'summary' - drop: " + self.str_today
-      del train["summary"]
-      gc.collect()
-      print "==> Feature Engineering - TfidfVectorizer for 'summary' - dropped: " + self.str_today
-
-    print "==> Feature Engineering - Treat remaining null values: " + self.str_today
-    train.fillna(0, inplace=True)
-    gc.collect()
-
-    return train
-    
-
-################################################
-#### TRAIN A RANDOM FOREST MODEL
-################################################
-class TrainRandomForestModel(luigi.Task):
-  date         = luigi.Parameter(default=datetime.today())
-  
-  s3_csvs      = luigi.Parameter('s3://encorealert-luigi-development/actor_classification/csv/')
-  s3_models    = luigi.Parameter('s3://encorealert-luigi-development/actor_classification/models/')
-  
-  local_csvs   = '/mnt/encore-luigi/data/actor_classification/csv/'
-  local_path   = '/mnt/encore-luigi/data/actor_classification/models/'
-
-  input_prefix = '/mnt/encore-luigi/data/actor_classification/csv/enriched-actor_classification_train.csv'
-
-  def input_file(self):
-    return self.date.strftime(self.input_prefix + '.' + '%Y%m%d')
-
-  def requires(self):
-    yield [S3ToLocalTask(s3_path=self.s3_csvs + s3_file, local_path=self.local_csvs + s3_file) for s3_file in S3Client().list(path=self.s3_csvs)]
-    yield PreprocessData()
-
-  def output(self):
-    return {
-      'model': S3Target(self.model_path(self.s3_models)),
-      'model_features': S3Target(self.model_features_path(self.s3_models))
-      }
-
-  def run(self):
-    train = pd.read_csv(self.input_file())
-    print('Loaded:' + self.input_file())
+    print "==> Performing RandomizedSearchCV for best hyper-parameters: " + self.str_today
 
     outcome = "manual_segment"
 
     features = list(set(train.columns) - set([outcome]))
 
-    k_fold = KFold(n=len(train), n_folds=4, indices=False, shuffle=True)
-    b_scores, svc_scores = [], []
+    n_estimators = 100
 
-    print('==> Starting K-fold CV for ' + self.input_file())
-    for tr_indices, cv_indices in k_fold:
-        tr   = np.asarray(train[tr_indices][features])
-        tr_y = np.asarray(train[tr_indices][outcome])
+    # Model Pipeline
+    pipeline = Pipeline([ ("drop_cols", DropColumnsTransformer(["segment","link"])),
+                          ("verified", VerifiedTransformer()),
+                          ("lang", lang_ohe),
+                          ("fill_text_na", FillTextNA(["screen_name","name","summary"], "null")),
+                          ("qt_words", NumberOfWords(["name","summary"])),
+                          ("qt_non_alphanum_chars", NumberNonAlphaNumChars(["name","summary"])),
+                          ("qt_upper_case_chars", NumberUpperCaseChars(["name","summary"])),
+                          ("qt_camel_case_words", NumberCamelCaseWords(["name","summary"])),
+                          ("qt_mentions", NumberOfMentions(["summary"])),
+                          ("qt_periods", NumberOfPeriods(["summary"])),
+                          ("avg_words_per_period", AvgWordsPerPeriod(["summary"])),
+                          ("lower_case", TextToLowerCase(["screen_name","name","summary"])),
+                          ("family", MentionToFamilyRelation(["summary"])),
+                          ("person_names", person_names),
+                          ("occupations", mention_to_occupation),
+                          ("name_chars_tfidf", name_chars_tfidf),
+                          ("name_words_tfidf", name_words_tfidf),
+                          ("screen_name_tfidf", screen_name_tfidf),
+                          ("summary_tfidf", summary_tfidf),
+                          ("drop_text_cols", DropColumnsTransformer(["screen_name","name","summary"])),
+                          ("nparray", NumpyArrayTransformer()),
+                          ("model", RandomForestClassifier())])
 
-        cv   = np.asarray(train[cv_indices][features])
-        cv_y = np.asarray(train[cv_indices][outcome])
+    # RandomizedSearchCV params
+    parameters = {
+      "name_chars_tfidf__analyzer": ["char", "char_wb"],
+      "name_chars_tfidf__min_df": sp_randint(10, 80),
+      "name_words_tfidf__min_df": sp_randint(10, 80),
+      "screen_name_tfidf__min_df": sp_randint(10, 80),
+      "summary_tfidf__min_df": sp_randint(10, 80),
+      "model__n_estimators": [n_estimators],
+    }
 
-        rfmodel = RandomForestClassifier(n_estimators=100)
-        rfmodel.fit(tr, tr_y)
+    hp_search_cv = RandomizedSearchCV(pipeline, param_distributions=parameters, cv=5,
+                                      n_iter=10, n_jobs=-1, verbose=1, error_score=0)
 
-        print(confusion_matrix(cv_y, rfmodel.predict(cv)))    
-        print('score:' + str(rfmodel.score(cv, cv_y)))
-        
-    rfmodel = RandomForestClassifier(n_estimators=100)
-    rfmodel.fit(train[features], train[outcome])
+    print("...Performing hyperparameters search with cross-validation...")
+    print("...pipeline:", [name for name, _ in pipeline.steps])
+    print("...parameters:")
+    pprint(parameters)
+    t0 = time()
+    hp_search_cv.fit(train.loc[:,features], train.loc[:,outcome])
+    print("...done in %0.3fs" % (time() - t0))
+    print()
+    print("...Best score: %0.3f" % hp_search_cv.best_score_)
+    print("...Best parameters set:")
+    best_parameters = hp_search_cv.best_estimator_.get_params()
+
+    for param in parameters:
+        for param_name in param.keys():
+            print("...\t%s: %r" % (param_name, best_parameters[param_name]))
+
+    print "==> Training model with indicated best hyper-parameters: " + self.str_today
+
+    pipeline.set_params(**best_parameters)
+    pipeline.fit(train.loc[:,features], train.loc[:,outcome])
 
     if not os.path.exists(self.local_path):
       os.makedirs(self.local_path)
 
-    print('==> Persisting pickle files for ' + self.input_file())
+    print '==> Persisting model with pickle - ' + self.str_today
 
-    joblib.dump(rfmodel, self.model_path(self.local_path), compress=9)
-    joblib.dump(train.columns, self.model_features_path(self.local_path), compress=9)
+    joblib.dump(pipeline, self.model_path(self.local_path), compress=9)
 
     with open(self.model_path(self.local_path)) as model_pickle:
-      with open(self.model_features_path(self.local_path)) as model_features_pickle:
-        with self.output()['model'].open(mode='w') as s3_model:
-          with self.output()['model_features'].open(mode='w') as s3_model_features:
-            s3_model.write(model_pickle.read())
-            s3_model_features.write(model_features_pickle.read())
+      with self.output()['model'].open(mode='w') as s3_model:
+          s3_model.write(model_pickle.read())
 
     os.remove(self.model_path(self.local_path))
-    os.remove(self.model_features_path(self.local_path))
 
-    print('==> Pickle files persisted for ' + self.input_file())
+    print '==> Pickle model persisted - ' + self.self.str_today
 
-  def model_path(self, directory):
-    return directory + self.date.strftime('actor_classification_random_forest_%Y%m%d.pkl')
-
-  def model_features_path(self, directory):
-    return directory + self.date.strftime('actor_classification_random_forest_features_%Y%m%d.pkl')
 
 ################################################
 #### DEPLOY MODEL
@@ -290,12 +616,11 @@ class DeployModel(luigi.Task):
   model_local_directory = '/mnt/encore-luigi/data/actor_classification/deploy/'
 
   def requires(self):
-    return TrainRandomForestModel(self.date)
+    return TrainModel(self.date)
 
   def output(self):
-    for name in self.input():
-      s3_input = self.input()[name]
-      return LocalTarget(self.model_path(s3_input.path, self.model_local_directory))
+    s3_input = self.input()
+    return LocalTarget(self.model_path(s3_input.path, self.model_local_directory))
 
   def run(self):
     for name in self.input():
