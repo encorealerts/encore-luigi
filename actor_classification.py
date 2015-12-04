@@ -525,7 +525,7 @@ class TrainModel(luigi.Task):
 
     person_names = PersonNames(["name"]).fit(train)
 
-    print "==> Performing RandomizedSearchCV for best hyper-parameters: " + self.str_today
+    print "==> Performing a K-fold CV: " + self.str_today
 
     outcome = "manual_segment"
 
@@ -557,38 +557,24 @@ class TrainModel(luigi.Task):
                           ("nparray", NumpyArrayTransformer()),
                           ("model", RandomForestClassifier())])
 
-    # RandomizedSearchCV params
-    parameters = {
-      "name_chars_tfidf__analyzer": ["char", "char_wb"],
-      "name_chars_tfidf__min_df": sp_randint(10, 80),
-      "name_words_tfidf__min_df": sp_randint(10, 80),
-      "screen_name_tfidf__min_df": sp_randint(10, 80),
-      "summary_tfidf__min_df": sp_randint(10, 80),
-      "model__n_estimators": [n_estimators],
-    }
+    k_fold = KFold(n=len(train), n_folds=4, shuffle=True)
+    b_scores, svc_scores = [], []
 
-    hp_search_cv = RandomizedSearchCV(pipeline, param_distributions=parameters, cv=5,
-                                      n_iter=10, n_jobs=-1, verbose=1, error_score=0)
+    for tr_indices, cv_indices in k_fold:
+      tr    = train.iloc[tr_indices,:].loc[:, features].copy()
+      cv    = train.iloc[cv_indices,:].loc[:, features].copy()
 
-    print("...Performing hyperparameters search with cross-validation...")
-    print("...pipeline:", [name for name, _ in pipeline.steps])
-    print("...parameters:")
-    pprint(parameters)
-    t0 = time()
-    hp_search_cv.fit(train.loc[:,features], train.loc[:,outcome])
-    print("...done in %0.3fs" % (time() - t0))
-    print()
-    print("...Best score: %0.3f" % hp_search_cv.best_score_)
-    print("...Best parameters set:")
-    best_parameters = hp_search_cv.best_estimator_.get_params()
+      tr_y  = train.iloc[tr_indices,:][outcome].values
+      cv_y  = train.iloc[cv_indices,:][outcome].values
 
-    for param in parameters:
-        for param_name in param.keys():
-            print("...\t%s: %r" % (param_name, best_parameters[param_name]))
+      pipeline.fit(tr, tr_y)
 
-    print "==> Training model with indicated best hyper-parameters: " + self.str_today
+      print(confusion_matrix(cv_y, pipeline.predict(cv)))    
+      print('#### SCORE:' + str(pipeline.score(cv, cv_y)))
 
-    pipeline.set_params(**best_parameters)
+    print "==> Training model: " + self.str_today
+
+    pipeline.set_params(model__n_estimators = n_estimators)
     pipeline.fit(train.loc[:,features], train.loc[:,outcome])
 
     if not os.path.exists(self.local_path):
@@ -599,8 +585,8 @@ class TrainModel(luigi.Task):
     joblib.dump(pipeline, self.model_path(self.local_path), compress=9)
 
     with open(self.model_path(self.local_path)) as model_pickle:
-      with self.output()['model'].open(mode='w') as s3_model:
-          s3_model.write(model_pickle.read())
+      with self.output().open(mode='w') as s3_model:
+        s3_model.write(model_pickle.read())
 
     os.remove(self.model_path(self.local_path))
 
