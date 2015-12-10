@@ -417,11 +417,7 @@ class Debugger(BaseEstimator, TransformerMixin):
     return self
 
   def transform(self, X, y=None):
-    print "-------------------------"
-    print self.name
-    print "Dataset dimensions:"
-    print X.shape
-    print "-------------------------"
+    print self.name + ':', time()
     return X
 
 
@@ -544,27 +540,33 @@ class TrainModel(luigi.Task):
 
     # Model Pipeline
     pipeline = Pipeline([ ("drop_cols", DropColumnsTransformer(["segment","link"])),
+                          ("debugger", Debugger("Dataset Details")),
                           ("verified", VerifiedTransformer()),
                           ("lang", lang_ohe),
                           ("fill_text_na", FillTextNA(["screen_name","name","summary"], "null")),
+                          ("debugger", Debugger("Fill Text NA")),
                           ("qt_words", NumberOfWords(["name","summary"])),
                           ("qt_non_alphanum_chars", NumberNonAlphaNumChars(["name","summary"])),
                           ("qt_upper_case_chars", NumberUpperCaseChars(["name","summary"])),
                           ("qt_camel_case_words", NumberCamelCaseWords(["name","summary"])),
                           ("qt_mentions", NumberOfMentions(["summary"])),
                           ("qt_periods", NumberOfPeriods(["summary"])),
+                          ("debugger", Debugger("QTs")),
                           ("avg_words_per_period", AvgWordsPerPeriod(["summary"])),
                           ("lower_case", TextToLowerCase(["screen_name","name","summary"])),
                           ("family", MentionToFamilyRelation(["summary"])),
                           ("person_names", person_names),
+                          ("debugger", Debugger("Person Names")),
                           ("occupations", mention_to_occupation),
+                          ("debugger", Debugger("Occupations")),
                           ("name_chars_tfidf", name_chars_tfidf),
                           ("name_words_tfidf", name_words_tfidf),
                           ("screen_name_tfidf", screen_name_tfidf),
                           ("summary_tfidf", summary_tfidf),
+                          ("debugger", Debugger("TFIDfs")),
                           ("drop_text_cols", DropColumnsTransformer(["screen_name","name","summary"])),
-                          ("debugger", Debugger("Dataset Details")),
                           ("nparray", NumpyArrayTransformer()),
+                          ("debugger", Debugger("Numpy Array")),
                           ("model", RandomForestClassifier())])
 
     k_fold = KFold(n=len(train), n_folds=4, shuffle=True)
