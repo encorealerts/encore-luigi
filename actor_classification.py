@@ -11,7 +11,7 @@ import gc
 import matplotlib.pyplot as plt
 
 from pprint import pprint
-from time import time
+from time import time, ctime
 from datetime import datetime
 from scipy.stats import randint as sp_randint
 
@@ -30,7 +30,6 @@ from sklearn.base import TransformerMixin
 from sklearn.base import BaseEstimator
 from sklearn.utils.validation import check_is_fitted
 from sklearn.preprocessing import LabelEncoder, Imputer, StandardScaler
-from sklearn.lda import LDA
 from sklearn.decomposition import PCA, RandomizedPCA
 from sklearn.feature_selection import SelectKBest
 from sklearn.feature_extraction import DictVectorizer
@@ -57,7 +56,6 @@ class VerifiedTransformer(BaseEstimator, TransformerMixin):
     return self
 
   def transform(self, X, y=None):
-    X = X.copy()
     X.verified.fillna(False, inplace=True)
     X.verified = LabelEncoder().fit_transform(X.verified)
     return X
@@ -73,7 +71,6 @@ class LangOneHotEncoding(BaseEstimator, TransformerMixin):
   def transform(self, X, y=None):
     check_is_fitted(self, 'feature_names_')
     
-    X = X.copy()
     X["lang"].fillna("", inplace=True)
     for lang_feature in self.feature_names_:
         X[lang_feature] = [(1 if lang_feature == "lang_"+v else 0) for v in X["lang"].values]
@@ -92,7 +89,6 @@ class FillTextNA(BaseEstimator, TransformerMixin):
     return self
 
   def transform(self, X, y=None):
-    X = X.copy()
     for c in self.cols:
         if c in X:
             X[c].fillna(self.replace_by, inplace=True)
@@ -172,7 +168,6 @@ class TextToLowerCase(BaseEstimator, TransformerMixin):
     return self
 
   def transform(self, X, y=None):
-    X = X.copy()
     for c in self.cols:
       if c in X:
         X[c] = [t.lower() for t in X[c].values]
@@ -188,7 +183,6 @@ class NumberOfWords(BaseEstimator, TransformerMixin):
     return self
 
   def transform(self, X, y=None):
-    X = X.copy()
     for c in self.cols:
       if c in X:
         X["number_of_words_in_"+c] = [len(t.split(' ')) for t in X[c].values]
@@ -204,7 +198,6 @@ class NumberNonAlphaNumChars(BaseEstimator, TransformerMixin):
     return self
 
   def transform(self, X, y=None):
-    X = X.copy()
     for c in self.cols:
       if c in X:
         X["number_of_non_alphanum_in_"+c] = [len(re.sub(r"[\w\d]","", t)) for t in X[c].values]
@@ -220,7 +213,6 @@ class NumberUpperCaseChars(BaseEstimator, TransformerMixin):
     return self
 
   def transform(self, X, y=None):
-    X = X.copy()
     for c in self.cols:
       if c in X:
         X["number_of_upper_case_chars_in_"+c] = [len(re.sub(r"[^A-Z]","", t)) for t in X[c].values]
@@ -236,7 +228,6 @@ class NumberCamelCaseWords(BaseEstimator, TransformerMixin):
     return self
 
   def transform(self, X, y=None):
-    X = X.copy()
     for c in self.cols:
       if c in X:
         X["number_of_camel_case_words_in_"+c] = [len(re.findall(r"^[A-Z][a-z]|\s[A-Z][a-z]", t)) 
@@ -253,7 +244,6 @@ class NumberOfMentions(BaseEstimator, TransformerMixin):
     return self
 
   def transform(self, X, y=None):
-    X = X.copy()
     for c in self.cols:
       if c in X:
         X["number_of_mentions_in_"+c] = [len(re.findall(r"\s@[a-zA-Z]",t)) 
@@ -270,7 +260,6 @@ class NumberOfPeriods(BaseEstimator, TransformerMixin):
     return self
 
   def transform(self, X, y=None):
-    X = X.copy()
     for c in self.cols:
       if c in X:
         X["number_of_periods_in_"+c] = [len(t.split(". ")) 
@@ -287,7 +276,6 @@ class AvgWordsPerPeriod(BaseEstimator, TransformerMixin):
     return self
 
   def transform(self, X, y=None):
-    X = X.copy()
     for c in self.cols:
       if c in X:
         X["avg_words_per_period_in_"+c] = [np.mean([len(p.split(" ")) for p in t.split(". ")]) 
@@ -307,17 +295,16 @@ class MentionToFamilyRelation(BaseEstimator, TransformerMixin):
     count = 0
     tokenizer = nltk.RegexpTokenizer(r'[a-z]+')
     for tkn in tokenizer.tokenize(t):
-      if tkn in ["husband","wife","father","mother","daddy","mommy",
-                 "grandfather","grandmother","grandpa","grandma"]:
-        count += 1
+          if tkn in ["husband","wife","father","mother","daddy","mommy",
+                     "grandfather","grandmother","grandpa","grandma"]:
+                count += 1
     return count
 
   def transform(self, X, y=None):
-    X = X.copy()
     for c in self.cols:
-      if c in X:
-          X["mention_to_family_relation_in_"+c] = [self.count_mentions(t) 
-                                                   for t in X[c].values]
+        if c in X:
+            X["mention_to_family_relation_in_"+c] = [self.count_mentions(t) 
+                                                     for t in X[c].values]
     return X
 
 
@@ -328,24 +315,23 @@ class MentionToOccupation(BaseEstimator, TransformerMixin):
 
   def fit(self, X, y=None):
     occupations = pd.read_csv("https://raw.githubusercontent.com/johnlsheridan/occupations/master/occupations.csv")
-    self.occupations_ = [o.lower() for o in occupations.Occupations.values]
+    occupations = [o.lower().split(' ')[-1] for o in occupations.Occupations.values]
+    self.occupations_ = dict.fromkeys(occupations, 1)
     return self
   
   def count_mentions(self, t):
     count = 0
-    for o in self.occupations_:
-      count += len(re.findall(r"(^|\W)%s(\W|$)" % o, t))
-      if count == 3:
-          break
+    tokenizer = nltk.RegexpTokenizer(r'[a-z]+')
+    for name in tokenizer.tokenize(t):
+        count += self.occupations_.get(name, 0)
     return count
 
   def transform(self, X, y=None):
     check_is_fitted(self, 'occupations_')
-    X = X.copy()
     for c in self.cols:
-      if c in X:
-        X["mention_to_occupation_in_"+c] = [self.count_mentions(t) 
-                                             for t in X[c].values]
+        if c in X:
+            X["mention_to_occupation_in_" + c] = [self.count_mentions(t) 
+                                                 for t in X[c].values]
     return X
     
 
@@ -359,26 +345,23 @@ class PersonNames(BaseEstimator, TransformerMixin):
     male_names   = pd.read_csv("http://deron.meranda.us/data/census-dist-male-first.txt", names=["name"])
     female_names = [re.sub(r"[^a-z]","",n.lower()) for n in female_names.name.values]
     male_names   = [re.sub(r"[^a-z]","",n.lower()) for n in male_names.name.values]        
-    self.person_names_ = list(set(male_names + female_names))
+    self.person_names_ = dict.fromkeys(set(male_names + female_names), 1)
     return self
   
   def count_mentions(self, t):
     count = 0
     tokenizer = nltk.RegexpTokenizer(r'[a-z]+')
     for name in tokenizer.tokenize(t):
-      if name in self.person_names_:
-        count += 1
+        count += self.person_names_.get(name, 0)
     return count
 
   def transform(self, X, y=None):
     check_is_fitted(self, 'person_names_')
-    X = X.copy()
     for c in self.cols:
-      if c in X:
-        X["person_names_in_"+c] = [self.count_mentions(t) 
-                                   for t in X[c].values]
-    return X
-    
+        if c in X:
+            X["person_names_in_" + c] = [self.count_mentions(t) 
+                                        for t in X[c].values]
+    return X   
 
 class DropColumnsTransformer(BaseEstimator, TransformerMixin):
 
@@ -409,42 +392,41 @@ class NumpyArrayTransformer(BaseEstimator, TransformerMixin):
 
 
 class Debugger(BaseEstimator, TransformerMixin):
-
   def __init__(self, name=""):
-    self.name = name
+      self.name = name
 
   def fit(self, X, y=None):
-    return self
+      return self
 
   def transform(self, X, y=None):
-    print self.name + ':', time()
-    return X
+      print self.name, '-', ctime(), X.shape
+      return X
 
 
 ################################################
 #### DOWNLOAD TRAINING DATA FROM S3
 ################################################
 class DownloadTrainingData(S3ToLocalTask):
-  date = luigi.DateParameter()
+  date = luigi.DateParameter(default=datetime.today())
   
   req_remote_host = luigi.Parameter(default='ubuntu@ec2-23-21-255-214.compute-1.amazonaws.com')
   req_remote_path = luigi.Parameter(default='labs/trainers/actor_classification_train.csv')
   req_key_file    = luigi.Parameter(default='/Users/felipeclopes/.ec2/encore')
 
-  s3_path     = luigi.Parameter(default='s3://encorealert-luigi-development/actor_classification/raw/actor_classification_train.csv')
-  local_path  = luigi.Parameter(default='/mnt/encore-luigi/data/actor_classification/raw/actor_classification_train.csv')  
+  input_path_s3     = luigi.Parameter(default='s3://encorealert-luigi-development/actor_classification/raw/')
+  output_path_local = luigi.Parameter(default='./data/actor_classification/raw/')  
 
-  def requires(self):
-    return RemoteToS3Task(host=self.req_remote_host, 
-      remote_path=self.date.strftime(self.req_remote_path + '.' + '%Y%m%d'), 
-      s3_path=self.date.strftime(self.s3_path + '.' + '%Y%m%d'), 
-      key_file=self.req_key_file)
+  def input_file(self):
+    print "input_fule:", self.date.strftime(self.input_path_s3 + 'actor_classification_train.csv' + '.' + '%Y%m%d')
+    return self.date.strftime(self.input_path_s3 + 'actor_classification_train.csv' + '.' + '%Y%m%d')
+  def output_file(self):
+    print "output_fule:", self.date.strftime(self.output_path_local + 'actor_classification_train.csv' + '.' + '%Y%m%d')
+    return self.date.strftime(self.output_path_local + 'actor_classification_train.csv' + '.' + '%Y%m%d')
 
   def input_target(self):
-    return S3Target(self.date.strftime(self.s3_path + '.' + '%Y%m%d'), client=self._get_s3_client())
-
+    return S3Target(self.input_file(), client=self._get_s3_client())
   def output_target(self):
-    return LocalTarget(self.date.strftime(self.local_path + '.' + '%Y%m%d'))
+    return LocalTarget(self.output_file())
 
 
 ################################################
@@ -453,14 +435,13 @@ class DownloadTrainingData(S3ToLocalTask):
 class TrainModel(luigi.Task):
   date         = luigi.Parameter(default=datetime.today())
   str_today    = datetime.today().strftime('%Y%m%d')
-  start_date   = datetime(2015,11,24)
+  start_date   = datetime(2015,12,24)
   
-  input_dir    = '/mnt/encore-luigi/data/actor_classification/raw/'
   input_prefix = 'actor_classification_train.csv'
   
-  s3_models    = luigi.Parameter('s3://encorealert-luigi-development/actor_classification/models/')
-  
-  local_path   = '/mnt/encore-luigi/data/actor_classification/models/'
+  input_dir    = luigi.Parameter('./data/actor_classification/raw/')
+  output_dir   = luigi.Parameter('s3://encorealert-luigi-development/actor_classification/models/')
+  local_path   = './data/actor_classification/models/'
 
   def model_path(self, directory):
     return directory + self.date.strftime('actor_classification_trained_model_%Y%m%d.pkl')
@@ -482,53 +463,15 @@ class TrainModel(luigi.Task):
     return train
 
   def output(self):
-    return S3Target(self.model_path(self.s3_models))
+    return S3Target(self.model_path(self.output_dir))
 
   def requires(self):
-    yield RangeDailyBase(start=self.start_date, of='DownloadTrainingData')
+    yield RangeDailyBase(start=self.start_date, of=DownloadTrainingData)
 
   def run(self):
     # Read input dataset
     print "==> Loading raw data: " + self.str_today
     train = self.load_input_dataframe()
-
-    print "==> Fitting transformators: " + self.str_today
-
-    lang_ohe = LangOneHotEncoding().fit(train)
-
-    name_chars_tfidf = DataFrameTfidfVectorizer(col="name", 
-                                                prefix="name_c",
-                                                ngram_range=(3, 5), 
-                                                analyzer="char",
-                                                binary=True, #False
-                                                min_df = 50) #8
-
-    name_words_tfidf = DataFrameTfidfVectorizer(col="name", 
-                                                prefix="name_w", 
-                                                token_pattern=r'\w+',
-                                                ngram_range=(1, 2), 
-                                                analyzer="word",
-                                                binary=True, #False
-                                                min_df = 10) #8
-
-    screen_name_tfidf = DataFrameTfidfVectorizer(col="screen_name", 
-                                                 ngram_range=(3, 5), 
-                                                 analyzer="char",
-                                                 binary=True, #False
-                                                 min_df = 50) #8
-
-    summary_tfidf = DataFrameTfidfVectorizer(col="summary",
-                                             token_pattern=r'\w+',
-                                             ngram_range=(1, 3), 
-                                             analyzer="word",
-                                             binary=True, #False
-                                             sublinear_tf=True, 
-                                             stop_words='english',
-                                             min_df = 50) #5
-
-    mention_to_occupation = MentionToOccupation(["summary"]).fit(train)
-
-    person_names = PersonNames(["name"]).fit(train)
 
     print "==> Performing a K-fold CV: " + self.str_today
 
@@ -540,36 +483,63 @@ class TrainModel(luigi.Task):
 
     # Model Pipeline
     pipeline = Pipeline([ ("drop_cols", DropColumnsTransformer(["segment","link"])),
-                          ("debugger", Debugger("Dataset Details")),
-                          ("verified", VerifiedTransformer()),
-                          ("lang", lang_ohe),
-                          ("fill_text_na", FillTextNA(["screen_name","name","summary"], "null")),
-                          ("debugger", Debugger("Fill Text NA")),
-                          ("qt_words", NumberOfWords(["name","summary"])),
-                          ("qt_non_alphanum_chars", NumberNonAlphaNumChars(["name","summary"])),
-                          ("qt_upper_case_chars", NumberUpperCaseChars(["name","summary"])),
-                          ("qt_camel_case_words", NumberCamelCaseWords(["name","summary"])),
-                          ("qt_mentions", NumberOfMentions(["summary"])),
-                          ("qt_periods", NumberOfPeriods(["summary"])),
-                          ("debugger", Debugger("QTs")),
-                          ("avg_words_per_period", AvgWordsPerPeriod(["summary"])),
-                          ("lower_case", TextToLowerCase(["screen_name","name","summary"])),
-                          ("family", MentionToFamilyRelation(["summary"])),
-                          ("person_names", person_names),
-                          ("debugger", Debugger("Person Names")),
-                          ("occupations", mention_to_occupation),
-                          ("debugger", Debugger("Occupations")),
-                          ("name_chars_tfidf", name_chars_tfidf),
-                          ("name_words_tfidf", name_words_tfidf),
-                          ("screen_name_tfidf", screen_name_tfidf),
-                          ("summary_tfidf", summary_tfidf),
-                          ("debugger", Debugger("TFIDfs")),
-                          ("drop_text_cols", DropColumnsTransformer(["screen_name","name","summary"])),
-                          ("nparray", NumpyArrayTransformer()),
-                          ("debugger", Debugger("Numpy Array")),
-                          ("model", RandomForestClassifier())])
+                      ("verified", VerifiedTransformer()),
+                      ("lang", LangOneHotEncoding()),
+                      ("fill_text_na", FillTextNA(["screen_name","name","summary"], "null")),
+                      ("debugger1", Debugger('Starting')),
+                      ("qt_words", NumberOfWords(["name","summary"])),
+                      ("qt_non_alphanum_chars", NumberNonAlphaNumChars(["name","summary"])),
+                      ("qt_upper_case_chars", NumberUpperCaseChars(["name","summary"])),
+                      ("qt_camel_case_words", NumberCamelCaseWords(["name","summary"])),
+                      ("qt_mentions", NumberOfMentions(["summary"])),
+                      ("qt_periods", NumberOfPeriods(["summary"])),
+                      ("avg_words_per_period", AvgWordsPerPeriod(["summary"])),
+                      ("lower_case", TextToLowerCase(["screen_name","name","summary"])),
+                      ("family", MentionToFamilyRelation(["summary"])),
+                      ("debugger2", Debugger('Basic Statistics')),
+                      ("person_names", PersonNames(["name"])),
+                      ("debugger3", Debugger('Person Names')),
+                      ("occupations", MentionToOccupation(["summary"])),
+                      ("debugger4", Debugger('Occupations')),
+                      ("name_chars_tfidf", DataFrameTfidfVectorizer(col="name", 
+                                            prefix="name_c",
+                                            ngram_range=(3, 5), 
+                                            analyzer="char",
+                                            binary=True, #False
+                                            min_df = 50,
+                                            max_features=50)),
+                      ("name_words_tfidf", DataFrameTfidfVectorizer(col="name", 
+                                            prefix="name_w", 
+                                            token_pattern=r'\w+',
+                                            ngram_range=(1, 2), 
+                                            analyzer="word",
+                                            binary=True, #False
+                                            min_df = 10,
+                                            max_features=50)),
+                      ("debugger5", Debugger('Names TFIDF')),
+                      ("screen_name_tfidf", DataFrameTfidfVectorizer(col="screen_name", 
+                                            ngram_range=(3, 5), 
+                                            analyzer="char",
+                                            binary=True, #False
+                                            min_df = 50,
+                                            max_features=50)),
+                      ("debugger6", Debugger('Screen Names TFIDF')),
+                      ("summary_tfidf", DataFrameTfidfVectorizer(col="summary",
+                                          token_pattern=r'\w+',
+                                          ngram_range=(1, 3), 
+                                          analyzer="word",
+                                          binary=True, #False
+                                          sublinear_tf=True, 
+                                          stop_words='english',
+                                          min_df = 50,
+                                          max_features=50)),
+                      ("debugger7", Debugger('Summary TFIDF')),
+                      ("drop_text_cols", DropColumnsTransformer(["screen_name","name","summary"])),
+                      ("nparray", NumpyArrayTransformer()),
+                      ("debugger8", Debugger('Finish')),
+                      ("model", RandomForestClassifier())])
 
-    k_fold = KFold(n=len(train), n_folds=4, shuffle=True)
+    k_fold = KFold(n=len(train), n_folds=2, shuffle=True)
     b_scores, svc_scores = [], []
 
     for tr_indices, cv_indices in k_fold:
@@ -611,18 +581,16 @@ class TrainModel(luigi.Task):
 class DeployModel(luigi.Task):
   date = luigi.Parameter(default=datetime.today())
   
-  model_local_directory = '/mnt/encore-luigi/data/actor_classification/deploy/'
+  output_dir = luigi.Parameter('./data/actor_classification/deploy/')
 
   def requires(self):
     return TrainModel(self.date)
 
   def output(self):
-    s3_input = self.input()
-    return LocalTarget(self.model_path(s3_input.path, self.model_local_directory))
+    return LocalTarget(self.model_path(self.input().path, self.output_dir))
 
   def run(self):
-    s3_input = self.input()
-    S3ToLocalTask(s3_path=s3_input.path, local_path=self.model_path(s3_input.path, self.model_local_directory)).run()
+    S3ToLocalTask(input_path_s3=self.input().path, output_path_local=self.model_path(self.input().path, self.output_dir)).run()
 
   def model_path(self, path, directory):
     filename = path.split('/')[-1]

@@ -100,10 +100,10 @@ class LocalToRemoteTask(TransferTask):
     key_file = Parameter()
 
     # S3 URL for the file destination (including file name)
-    local_path = Parameter()
+    input_path_local = Parameter()
 
     def input_target(self):
-        return LocalTarget(self.local_path)
+        return LocalTarget(self.input_path_local)
 
     def output_target(self):
         return RemoteTarget(self.remote_path, host=self.host, key_file=self.key_file)
@@ -122,46 +122,46 @@ class LocalToS3Task(S3TransferTask):
     Example usage:
 
     ::    # copy from /mnt/tmp/myfile.txt to s3://my-bucket/my-folder/myfile.txt
-    ::    LocalToS3Task(local_path='/mnt/tmp/myfile.txt', 
-    ::                  s3_path='s3://my-bucket/my-folder/myfile.txt')
+    ::    LocalToS3Task(input_path_local='/mnt/tmp/myfile.txt', 
+    ::                  output_path_s3='s3://my-bucket/my-folder/myfile.txt')
     """
 
     # full (absolute) local path to the file to copy
-    local_path = Parameter()
+    input_path_local = Parameter()
 
     # S3 URL for the file destination (including file name)
-    s3_path = Parameter()
+    output_path_s3 = Parameter()
 
     def input_target(self):
-        return LocalTarget(self.local_path)
+        return LocalTarget(self.input_path_local)
 
     def output_target(self):
-        return S3Target(self.s3_path, client=self._get_s3_client())
+        return S3Target(self.output_path_s3, client=self._get_s3_client())
 
 class RemoteToS3Task(S3TransferTask):
     host = Parameter()
     # full (absolute) local path to the file to copy
-    remote_path = Parameter()
+    input_path_remote = Parameter()
     # S3 URL for the file destination (including file name)
-    s3_path = Parameter()
+    output_path_s3 = Parameter()
     # Keyfile path
     key_file = Parameter()
 
     def input_target(self):
-        return RemoteTarget(self.remote_path, host=self.host, key_file=self.key_file)
+        return RemoteTarget(self.input_path_remote, host=self.host, key_file=self.key_file)
 
     def output_target(self):
-      return S3Target(self.s3_path, client=self._get_s3_client())
+      return S3Target(self.output_path_s3, client=self._get_s3_client())
 
 class S3ToLocalTask(S3TransferTask):
     # S3 URL for the file to copy
-    s3_path = Parameter()
+    input_path_s3 = Parameter()
 
     # full (absolute) target local path for the file (including file name)
-    local_path = Parameter()
+    output_path_local = Parameter()
 
     def input_target(self):
-        return S3Target(self.s3_path, client=self._get_s3_client())
+        return S3Target(self.input_path_s3, client=self._get_s3_client())
 
     def output_target(self):
-        return LocalTarget(self.local_path)
+        return LocalTarget(self.output_path_local)
