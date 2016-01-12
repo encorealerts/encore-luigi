@@ -38,6 +38,9 @@ from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer, T
 import glob
 import csv
 import luigi
+
+from boto.s3.connection import S3Connection
+
 from luigi import LocalTarget
 from luigi.s3 import S3Target, S3Client
 from luigi.parameter import Parameter
@@ -402,42 +405,16 @@ class Debugger(BaseEstimator, TransformerMixin):
       print self.name, '-', ctime(), X.shape
       return X
 
-
-################################################
-#### DOWNLOAD TRAINING DATA FROM S3
-################################################
-class DownloadTrainingData(S3ToLocalTask):
-  date = luigi.DateParameter(default=datetime.today())
-  
-  req_remote_host = luigi.Parameter(default='ubuntu@ec2-23-21-255-214.compute-1.amazonaws.com')
-  req_remote_path = luigi.Parameter(default='labs/trainers/actor_classification_train.csv')
-  req_key_file    = luigi.Parameter(default='/Users/felipeclopes/.ec2/encore')
-
-  input_path_s3     = luigi.Parameter(default='s3://encorealert-luigi-development/actor_classification/raw/')
-  output_path_local = luigi.Parameter(default='./data/actor_classification/raw/')  
-
-  def input_file(self):
-    print "input_fule:", self.date.strftime(self.input_path_s3 + 'actor_classification_train.csv' + '.' + '%Y%m%d')
-    return self.date.strftime(self.input_path_s3 + 'actor_classification_train.csv' + '.' + '%Y%m%d')
-  def output_file(self):
-    print "output_fule:", self.date.strftime(self.output_path_local + 'actor_classification_train.csv' + '.' + '%Y%m%d')
-    return self.date.strftime(self.output_path_local + 'actor_classification_train.csv' + '.' + '%Y%m%d')
-
-  def input_target(self):
-    return S3Target(self.input_file(), client=self._get_s3_client())
-  def output_target(self):
-    return LocalTarget(self.output_file())
-
-
 ################################################
 #### TRAIN MODEL
 ################################################
 class TrainModel(luigi.Task):
   date         = luigi.Parameter(default=datetime.today())
   str_today    = datetime.today().strftime('%Y%m%d')
-  start_date   = datetime(2015,12,24)
-  
-  input_prefix = 'actor_classification_train.csv'
+
+  bucket       = luigi.Parameter('encore-luigi-development')
+  bucket_dir   = luigi.Parameter('actor_classification/raw/')
+  bucket_file  = luigi.Parameter('actor_classification_train.csv')
   
   input_dir    = luigi.Parameter('./data/actor_classification/raw/')
   output_dir   = luigi.Parameter('s3://encorealert-luigi-development/actor_classification/models/')
@@ -449,7 +426,7 @@ class TrainModel(luigi.Task):
   def load_input_dataframe(self):
     train = None
     for file in os.listdir(self.input_dir):
-      if fnmatch.fnmatch(file, self.input_prefix+'.*') and os.stat(self.input_dir+file).st_size > 0:
+      if fnmatch.fnmatch(file, self.bucket_file + '.*') and os.stat(self.input_dir+file).st_size > 0:
         if train is None:
           print "==> Initializing input dataframe with " + file + ": " + self.str_today
           train = pd.read_csv(open(self.input_dir+file,'rU'),
@@ -466,7 +443,12 @@ class TrainModel(luigi.Task):
     return S3Target(self.model_path(self.output_dir))
 
   def requires(self):
-    yield RangeDailyBase(start=self.start_date, of=DownloadTrainingData)
+    conn    = S3Connection()
+    bucket  = conn.get_bucket(self.bucket)
+    files   = bucket.list(self.bucket_dir + self.bucket_file)
+    for s3_file in files:
+      s3_file_name = s3_file.name.split('/')[-1]
+      yield S3ToLocalTask(input_path_s3='s3://' + self.bucket + '/' + self.bucket_dir + s3_file_name, output_path_local=self.input_dir + s3_file_name)
 
   def run(self):
     # Read input dataset
@@ -590,6 +572,7 @@ class DeployModel(luigi.Task):
     return LocalTarget(self.model_path(self.input().path, self.output_dir))
 
   def run(self):
+    print "S3ToLocalTask -", 'input_path_s3:', self.input().path, 'output_path_local:', self.model_path(self.input().path, self.output_dir)
     S3ToLocalTask(input_path_s3=self.input().path, output_path_local=self.model_path(self.input().path, self.output_dir)).run()
 
   def model_path(self, path, directory):
