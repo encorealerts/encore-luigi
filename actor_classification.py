@@ -34,7 +34,7 @@ class TrainModel(luigi.Task):
   date         = luigi.Parameter(default=datetime.today())
   str_today    = datetime.today().strftime('%Y%m%d')
 
-  bucket       = luigi.Parameter('encore-luigi-development')
+  bucket       = luigi.Parameter('encorealert-luigi-development')
   bucket_dir   = luigi.Parameter('actor_classification/raw/')
   bucket_file  = luigi.Parameter('actor_classification_train.csv')
   
