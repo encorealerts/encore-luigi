@@ -138,7 +138,7 @@ class TrainModel(luigi.Task):
                                           min_df = 50,
                                           max_features=50)),
                       ("debugger7", PipelineDebugger('Summary TFIDF')),
-                      ("drop_text_cols", DropColumnsTransformer(["screen_name","name","summary"])),
+                      ("drop_text_cols", DropColumnsTransformer(["screen_name","name","lang","summary"])),
                       ("nparray", NumpyArrayTransformer()),
                       ("debugger8", PipelineDebugger('Finish')),
                       ("model", RandomForestClassifier())])
